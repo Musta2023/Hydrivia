@@ -5,230 +5,229 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
-
-#include "secrets.h" // to gitignore
-
-// ============================================================================
-// HYDRIVIA - SMART IRRIGATION SYSTEM
-//============================================================================
-
-// ============================================================================
-// BME280
-// ============================================================================
+#include "secrets.h"
 
 Adafruit_BME280 bme;
+bool bmeAvailable = false;
 
 #define BME280_I2C_ADDR 0x77
 
 // ============================================================================
-// MQTT CLIENT
+// GPIO
 // ============================================================================
 
-const char* MQTT_CLIENT_ID =
-    "hydrivia-irrigation";
+// US-100 ultrasonic sensor
+#define PIN_ULTRASONIC_TRIG 5
+#define PIN_ULTRASONIC_ECHO 18
 
+// Soil moisture sensors
+#define PIN_SOIL_MOISTURE_1 34   // Zone 1 - Tomato
+#define PIN_SOIL_MOISTURE_2 35   // Zone 2 - Mint
+#define PIN_SOIL_MOISTURE_3 36   // Zone 3 - Onion
 
-// ============================================================================
-// MQTT SENSOR TOPICS
-// ============================================================================
+// Common pump
+#define PIN_PUMP_RELAY 27
 
-const char* TOPIC_TEMP =
-    "hydrivia/sensors/temperature";
+// Electrovalves
+#define PIN_VALVE1_RELAY 26
+#define PIN_VALVE2_RELAY 25
+#define PIN_VALVE3_RELAY 23
 
-const char* TOPIC_AIR_HUMIDITY =
-    "hydrivia/sensors/air_humidity";
-
-const char* TOPIC_WATER_LEVEL =
-    "hydrivia/sensors/water_level";
-
-const char* TOPIC_SOIL_HUMIDITY =
-    "hydrivia/sensors/soil_humidity";
-
-
-// ============================================================================
-// MQTT SENSOR SNAPSHOT // for each 60s
-// ============================================================================
-
-const char* TOPIC_SENSOR_SNAPSHOT =
-    "hydrivia/sensors/snapshot";
-
-
-// ============================================================================
-// MQTT PUMP TOPICS
-// ============================================================================
-
-const char* TOPIC_PUMP_COMMAND =
-    "hydrivia/pump/command";
-
-const char* TOPIC_PUMP_STATUS =
-    "hydrivia/pump/status";
-
-
-// ============================================================================
-// MQTT VALVE 1 TOPICS
-// Tomato
-// ============================================================================
-
-const char* TOPIC_VALVE1_COMMAND =
-    "hydrivia/valve/1/command";
-
-const char* TOPIC_VALVE1_STATUS =
-    "hydrivia/valve/1/status";
-
-
-// ============================================================================
-// MQTT VALVE 2 TOPICS
-// Mint
-// ============================================================================
-
-const char* TOPIC_VALVE2_COMMAND =
-    "hydrivia/valve/2/command";
-
-const char* TOPIC_VALVE2_STATUS =
-    "hydrivia/valve/2/status";
-
-
-// ============================================================================
-// MQTT VALVE 3 TOPICS
-// Onion
-// ============================================================================
-
-const char* TOPIC_VALVE3_COMMAND =
-    "hydrivia/valve/3/command";
-
-const char* TOPIC_VALVE3_STATUS =
-    "hydrivia/valve/3/status";
-
-
-// ============================================================================
-// MQTT ALERTS
-// ============================================================================
-
-const char* TOPIC_ALERTS =
-    "hydrivia/alerts";
-
-
-// ============================================================================
-// GPIO DEFINITIONS
-// ============================================================================
-
-//
-
-#define PIN_ULTRASONIC_TRIG 5 //X15
-#define PIN_ULTRASONIC_ECHO 18 //X14
-
-
-// Soil Moisture
-
-#define PIN_SOIL_MOISTURE 34 //X6
-
-
-// Pump Relay
-
-#define PIN_PUMP_RELAY 27 //integrated
-
-
-// Electrovalves( simulated by leds )
-
-#define PIN_VALVE1_RELAY 26 //led 1 X1
-#define PIN_VALVE2_RELAY 25 //led 2 X2
-#define PIN_VALVE3_RELAY 23 //Led 3 X10
-
-
-// LEDs
-
-#define PIN_LED_LOW 33 //tank level crtic <20%
-#define PIN_LED_NORMAL 32 // tank level normal
-
+// Tank status LEDs
+#define PIN_LED_LOW 33
+#define PIN_LED_NORMAL 32
 
 // BME280
-
 #define PIN_I2C_SDA 21
 #define PIN_I2C_SCL 22
 
+// Device ID
+const char* DEVICE_ID = "hydrivia-esp32-01";
+
+// ============================================================================
+// ZONE CONFIGURATION
+// ============================================================================
+
+const char* ZONE1_PLANT = "tomato";
+const char* ZONE2_PLANT = "mint";
+const char* ZONE3_PLANT = "onion";
 
 // ============================================================================
 // WATER TANK CALIBRATION
 // ============================================================================
 
-const float EMPTY_DISTANCE = 18.69; // in cm
-
-const float FULL_DISTANCE = 8.21;
 
 
-// ============================================================================
-// SOIL MOISTURE CALIBRATION
-// ============================================================================
-
-const int SOIL_DRY_VALUE = 3500; // sec
-
-const int SOIL_WET_VALUE = 1500;// watered 
-
+const float EMPTY_DISTANCE = 180.69f;
+const float FULL_DISTANCE  = 20.21f;
+const float TANK_CAPACITY_LITERS = 100.0f;
 
 // ============================================================================
-// WATER LEVEL SAFETY
+// SOIL SENSOR CALIBRATION
 // ============================================================================
 
-const float WATER_LEVEL_CRITICAL_PCT =
-    20.0; // critical
+const int SOIL_DRY_VALUE = 3500;
+const int SOIL_WET_VALUE = 1500;
 
-const float WATER_LEVEL_LOW_PCT =
-    30.0; //warnning
+// ============================================================================
+// SAFETY THRESHOLDS
+// ============================================================================
 
+const float WATER_LEVEL_CRITICAL_PCT = 20.0f;
+const float WATER_LEVEL_LOW_PCT = 30.0f;
 
 // ============================================================================
 // TIMING
 // ============================================================================
 
-// Sensors every 2 seconds
-
-const unsigned long SENSOR_INTERVAL_MS =
-    2000;
-
-
-// for fusionAI workflow, snapshot every 60 seconds
-
-const unsigned long SENSOR_SNAPSHOT_INTERVAL_MS =
-    60000;
-
-
-// Pump maximum runtime = 5 minutes (to prevent sensors damage or error data collecting so the pump run infinitly)
+const unsigned long SENSOR_INTERVAL_MS = 2000UL;
+const unsigned long SENSOR_SNAPSHOT_INTERVAL_MS = 60000UL;
 
 const unsigned long PUMP_MAX_RUNTIME_MS =
     5UL * 60UL * 1000UL;
 
+const unsigned long MQTT_RETRY_INTERVAL_MS = 5000UL;
 
 // ============================================================================
 // RELAY CONFIGURATION
 // ============================================================================
 
-//relay initializing
 const bool RELAY_ACTIVE_HIGH = true;
 
+// ============================================================================
+// MQTT TOPICS
+// ============================================================================
+
+// Zone 1
+const char* TOPIC_ZONE1_STATE =
+    "hydrivia/zones/1/state";
+
+const char* TOPIC_ZONE1_COMMAND =
+    "hydrivia/zones/1/command";
+
+// Zone 2
+const char* TOPIC_ZONE2_STATE =
+    "hydrivia/zones/2/state";
+
+const char* TOPIC_ZONE2_COMMAND =
+    "hydrivia/zones/2/command";
+
+// Zone 3
+const char* TOPIC_ZONE3_STATE =
+    "hydrivia/zones/3/state";
+
+const char* TOPIC_ZONE3_COMMAND =
+    "hydrivia/zones/3/command";
+
+// Pump
+const char* TOPIC_PUMP_STATE =
+    "hydrivia/pump/state";
+
+const char* TOPIC_PUMP_COMMAND =
+    "hydrivia/pump/command";
+
+// Tank
+const char* TOPIC_TANK_STATE =
+    "hydrivia/tank/state";
+
+// Environment
+const char* TOPIC_ENVIRONMENT_STATE =
+    "hydrivia/environment/state";
+
+// Complete system snapshot every 60 seconds
+const char* TOPIC_SNAPSHOT =
+    "hydrivia/snapshot";
+
+// Alerts
+const char* TOPIC_ALERTS =
+    "hydrivia/alerts";
 
 // ============================================================================
-// GLOBAL OBJECTS
+// MQTT
 // ============================================================================
+
+const char* MQTT_CLIENT_ID =
+    "hydrivia-irrigation";
 
 WiFiClientSecure espClient;
-
-PubSubClient mqttClient(
-    espClient
-);
-
+PubSubClient mqttClient(espClient);
 
 // ============================================================================
-// GLOBAL TIMERS
+// TIMERS
 // ============================================================================
 
 unsigned long lastSensorRead = 0;
-
 unsigned long lastSensorSnapshot = 0;
-
+unsigned long lastMqttRetryMillis = 0;
 unsigned long pumpStartMillis = 0;
 
-unsigned long lastMqttRetryMillis = 0;
+// ============================================================================
+// DATA STRUCTURES
+// ============================================================================
 
+struct ZoneData {
+
+    uint8_t id;
+
+    const char* plant;
+
+    float soilHumidity;
+
+    bool valveOpen;
+};
+
+struct SensorData {
+
+    ZoneData zone1;
+
+    ZoneData zone2;
+
+    ZoneData zone3;
+
+    // Tank
+    float waterLevel;
+    float volumeLiters;
+
+    // Environment
+    float temperature;
+    float airHumidity;
+
+    bool valid;
+};
+
+// ============================================================================
+// CURRENT SENSOR DATA
+// ============================================================================
+
+SensorData currentData = {
+
+    {
+        1,
+        ZONE1_PLANT,
+        0.0f,
+        false
+    },
+
+    {
+        2,
+        ZONE2_PLANT,
+        0.0f,
+        false
+    },
+
+    {
+        3,
+        ZONE3_PLANT,
+        0.0f,
+        false
+    },
+
+    0.0f,   // waterLevel
+    0.0f,   // volumeLiters
+    0.0f,   // temperature
+    0.0f,   // airHumidity
+    false   // valid
+};
 
 // ============================================================================
 // ACTUATOR STATES
@@ -236,44 +235,12 @@ unsigned long lastMqttRetryMillis = 0;
 
 bool pumpRunning = false;
 
-bool valve1Running = false;
-
-bool valve2Running = false;
-
-bool valve3Running = false;
-
-
-// ============================================================================
-// SENSOR DATA
-// ============================================================================
-
-struct SensorData {
-
-    float soilHumidity;
-
-    float waterLevel;
-
-    float temperature;
-
-    float airHumidity;
-
-    bool valid;
-};
-
-
-SensorData currentData;
-
-
 // ============================================================================
 // FUNCTION PROTOTYPES
 // ============================================================================
 
-// WiFi
-
+// Wi-Fi / MQTT
 void connectWiFi();
-
-
-// MQTT
 
 void connectMQTT();
 
@@ -283,75 +250,49 @@ void mqttCallback(
     unsigned int length
 );
 
+void handleZoneCommand(
+    uint8_t zone,
+    String command
+);
 
 // Sensors
-
 SensorData readSensors();
 
-float readSoilHumidityPercent();
+void readSoilHumidityPercent(
+    float& moisture1,
+    float& moisture2,
+    float& moisture3
+);
 
 float readWaterLevelPercent();
 
+float calculateVolumeLiters(
+    float waterLevelPercent
+);
+
 bool validateData(
-    const SensorData& d
+    const SensorData& data
 );
 
-
-// Sensor MQTT // to read only from the adress ram
-
-void publishSensorData(
-    const SensorData& d
+// Display
+void printSensorData(
+    const SensorData& data
 );
 
-void publishSensorSnapshot(
-    const SensorData& d
+// MQTT publishing
+void publishZoneState(
+    uint8_t zone
 );
 
+void publishAllZoneStates();
 
-// Pump
+void publishPumpState();
 
-void startPump();
+void publishTankState();
 
-void stopPump();
+void publishEnvironmentState();
 
-void publishPumpStatus();
-
-
-// Valves
-
-void openValve(
-    int valve
-);
-
-void closeValve(
-    int valve
-);
-
-void closeAllValves();
-
-void publishValveStatus(
-    int valve
-);
-
-void publishAllActuatorStatus();
-
-
-// Safety
-
-void checkPumpSafety();
-
-void emergencyShutdown();
-
-
-// Relay
-
-void setRelay(
-    int pin,
-    bool state
-);
-
-
-// Alerts
+void publishSnapshot();
 
 void publishAlert(
     const char* type,
@@ -359,13 +300,40 @@ void publishAlert(
     const char* message
 );
 
+// Pump
+void startPump();
 
-// Serial
+void stopPump();
 
-void printSensorData(
-    const SensorData& d
+void checkPumpSafety();
+
+void emergencyShutdown();
+
+// Zones / valves
+bool isZoneOpen(
+    uint8_t zone
 );
 
+void setZoneValve(
+    uint8_t zone,
+    bool state
+);
+
+void openZone(
+    uint8_t zone
+);
+
+void closeZone(
+    uint8_t zone
+);
+
+void closeAllZones();
+
+// GPIO
+void setRelay(
+    int pin,
+    bool state
+);
 
 // ============================================================================
 // SETUP
@@ -377,30 +345,15 @@ void setup() {
 
     delay(1000);
 
-
     Serial.println();
-
-    Serial.println(
-        "========================================"
-    );
-
-    Serial.println(
-        "       HYDRIVIA SMART IRRIGATION"
-    );
-
-    Serial.println(
-        "       MQTT + AI READY"
-    );
-
-    Serial.println(
-        "========================================"
-    );
-
+    Serial.println("==============================================");
+    Serial.println("       HYDRIVIA SMART IRRIGATION");
+    Serial.println("       ZONE-BASED MQTT ARCHITECTURE");
+    Serial.println("==============================================");
     Serial.println();
-
 
     // ========================================================================
-    // GPIO INITIALIZATION
+    // GPIO
     // ========================================================================
 
     pinMode(
@@ -422,7 +375,6 @@ void setup() {
         PIN_VALVE3_RELAY,
         OUTPUT
     );
-
 
     pinMode(
         PIN_ULTRASONIC_TRIG,
@@ -434,12 +386,20 @@ void setup() {
         INPUT
     );
 
-
     pinMode(
-        PIN_SOIL_MOISTURE,
+        PIN_SOIL_MOISTURE_1,
         INPUT
     );
 
+    pinMode(
+        PIN_SOIL_MOISTURE_2,
+        INPUT
+    );
+
+    pinMode(
+        PIN_SOIL_MOISTURE_3,
+        INPUT
+    );
 
     pinMode(
         PIN_LED_LOW,
@@ -451,13 +411,7 @@ void setup() {
         OUTPUT
     );
 
-
     analogReadResolution(12);
-
-
-    // ========================================================================
-    // INITIAL STATES
-    // ========================================================================
 
     digitalWrite(
         PIN_ULTRASONIC_TRIG,
@@ -474,16 +428,11 @@ void setup() {
         LOW
     );
 
-
-    // Pump OFF
-
+    // Everything OFF at startup
     setRelay(
         PIN_PUMP_RELAY,
         false
     );
-
-
-    // Valves OFF
 
     setRelay(
         PIN_VALVE1_RELAY,
@@ -500,20 +449,9 @@ void setup() {
         false
     );
 
-
-    pumpRunning = false;
-
-    valve1Running = false;
-
-    valve2Running = false;
-
-    valve3Running = false;
-
-
     Serial.println(
-        "[OK] GPIO pins initialized."
+        "[OK] GPIO initialized."
     );
-
 
     // ========================================================================
     // BME280
@@ -524,25 +462,28 @@ void setup() {
         PIN_I2C_SCL
     );
 
-
-    if (
-        !bme.begin(
+    bmeAvailable =
+        bme.begin(
             BME280_I2C_ADDR,
             &Wire
-        )
-    ) {
+        );
+
+    if (bmeAvailable) {
 
         Serial.println(
-            "[ERROR] BME280 sensor not found!"
+            "[OK] BME280 initialized."
         );
 
     } else {
 
         Serial.println(
-            "[OK] BME280 sensor initialized."
+            "[WARNING] BME280 not found."
+        );
+
+        Serial.println(
+            "[WARNING] Temperature and air humidity = 0."
         );
     }
-
 
     // ========================================================================
     // WIFI
@@ -550,42 +491,34 @@ void setup() {
 
     connectWiFi();
 
-
     // ========================================================================
     // MQTT
     // ========================================================================
 
     espClient.setInsecure();
 
-
     mqttClient.setServer(
         MQTT_SERVER,
         MQTT_PORT
     );
 
-
     mqttClient.setCallback(
         mqttCallback
     );
 
-
     mqttClient.setBufferSize(
-        512
+        2048
     );
-
 
     mqttClient.setKeepAlive(
         30
     );
 
-
     mqttClient.setSocketTimeout(
         15
     );
 
-
     connectMQTT();
-
 
     // ========================================================================
     // INITIAL SENSOR READING
@@ -594,38 +527,24 @@ void setup() {
     currentData =
         readSensors();
 
-
     currentData.valid =
         validateData(
             currentData
         );
 
-
     printSensorData(
         currentData
     );
 
-
     Serial.println();
-
-    Serial.println(
-        "========================================"
-    );
-
-    Serial.println(
-        "       INITIALIZATION COMPLETE"
-    );
-
-    Serial.println(
-        "========================================"
-    );
-
+    Serial.println("==============================================");
+    Serial.println("       HYDRIVIA READY");
+    Serial.println("==============================================");
     Serial.println();
 }
 
-
 // ============================================================================
-// MAIN LOOP
+// LOOP
 // ============================================================================
 
 void loop() {
@@ -633,31 +552,27 @@ void loop() {
     unsigned long now =
         millis();
 
-
     // ========================================================================
-    // WIFI CONNECTION
+    // WIFI
     // ========================================================================
 
     if (
-        WiFi.status() != WL_CONNECTED
+        WiFi.status() !=
+        WL_CONNECTED
     ) {
 
         connectWiFi();
     }
 
-
     // ========================================================================
-    // MQTT CONNECTION
+    // MQTT
     // ========================================================================
 
-    if (
-        !mqttClient.connected()
-    ) {
+    if (!mqttClient.connected()) {
 
         if (
-            now -
-            lastMqttRetryMillis >=
-            5000
+            now - lastMqttRetryMillis
+            >= MQTT_RETRY_INTERVAL_MS
         ) {
 
             lastMqttRetryMillis =
@@ -668,54 +583,50 @@ void loop() {
 
     } else {
 
-        // MQTT must be processed continuously
-
         mqttClient.loop();
     }
-
 
     // ========================================================================
     // SENSOR READING - EVERY 2 SECONDS
     // ========================================================================
 
     if (
-        now -
-        lastSensorRead >=
-        SENSOR_INTERVAL_MS
+        now - lastSensorRead
+        >= SENSOR_INTERVAL_MS
     ) {
 
         lastSensorRead =
             now;
 
-
-        // Read all sensors
-
         currentData =
             readSensors();
-
-
-        // Validate
 
         currentData.valid =
             validateData(
                 currentData
             );
 
+        // Synchronize zone valve states
+        currentData.zone1.valveOpen =
+            isZoneOpen(1);
 
-        // Serial output
+        currentData.zone2.valveOpen =
+            isZoneOpen(2);
+
+        currentData.zone3.valveOpen =
+            isZoneOpen(3);
 
         printSensorData(
             currentData
         );
 
-
         // ====================================================================
-        // WATER LEVEL LED
+        // WATER SAFETY
         // ====================================================================
 
         if (
-            currentData.waterLevel <
-            WATER_LEVEL_CRITICAL_PCT
+            currentData.waterLevel
+            < WATER_LEVEL_CRITICAL_PCT
         ) {
 
             digitalWrite(
@@ -728,19 +639,11 @@ void loop() {
                 LOW
             );
 
-
-            Serial.println(
-                "[ALERT] Water tank critical!"
-            );
-
-
-            // Emergency shutdown
-
             if (
                 pumpRunning ||
-                valve1Running ||
-                valve2Running ||
-                valve3Running
+                currentData.zone1.valveOpen ||
+                currentData.zone2.valveOpen ||
+                currentData.zone3.valveOpen
             ) {
 
                 emergencyShutdown();
@@ -759,9 +662,8 @@ void loop() {
             );
         }
 
-
         // ====================================================================
-        // INDIVIDUAL SENSOR TELEMETRY
+        // PUBLISH LIVE DATA
         // ====================================================================
 
         if (
@@ -769,179 +671,281 @@ void loop() {
             mqttClient.connected()
         ) {
 
-            publishSensorData(
-                currentData
-            );
+            publishAllZoneStates();
+
+            publishPumpState();
+
+            publishTankState();
+
+            publishEnvironmentState();
         }
     }
 
-
     // ========================================================================
-    // COMPLETE SENSOR SNAPSHOT - EVERY 60 SECONDS
-    // ========================================================================
-    // hydrivia/sensors/snapshot
+    // COMPLETE SNAPSHOT - EVERY 60 SECONDS
     // ========================================================================
 
     if (
-        now -
-        lastSensorSnapshot >=
-        SENSOR_SNAPSHOT_INTERVAL_MS
+        now - lastSensorSnapshot
+        >= SENSOR_SNAPSHOT_INTERVAL_MS
     ) {
 
         lastSensorSnapshot =
             now;
 
-
         if (
             currentData.valid &&
             mqttClient.connected()
         ) {
 
-            publishSensorSnapshot(
-                currentData
-            );
+            publishSnapshot();
         }
     }
 
-
     // ========================================================================
-    // PUMP SAFETY TIMER
+    // PUMP SAFETY
     // ========================================================================
 
     checkPumpSafety();
 }
 
-
 // ============================================================================
-// READ ALL SENSORS
+// SENSOR READING
 // ============================================================================
 
 SensorData readSensors() {
 
-    SensorData d;
+    SensorData data =
+        currentData;
 
+    // ========================================================================
+    // SOIL
+    // ========================================================================
 
-    // Soil
+    readSoilHumidityPercent(
+        data.zone1.soilHumidity,
+        data.zone2.soilHumidity,
+        data.zone3.soilHumidity
+    );
 
-    d.soilHumidity =
-        readSoilHumidityPercent();
+    // ========================================================================
+    // WATER LEVEL
+    // ========================================================================
 
-
-    // Water tank
-
-    d.waterLevel =
+    data.waterLevel =
         readWaterLevelPercent();
 
-
-    // BME280
-
-    d.temperature =
-        bme.readTemperature();
-
-
-    d.airHumidity =
-        bme.readHumidity();
-
-
     // ========================================================================
-    // BME280 ERROR
+    // WATER VOLUME
     // ========================================================================
 
-    if (
-        isnan(d.temperature) ||
-        isnan(d.airHumidity)
-    ) {
-
-        Serial.println(
-            "[ERROR] BME280 read failed!"
+    data.volumeLiters =
+        calculateVolumeLiters(
+            data.waterLevel
         );
 
+    // ========================================================================
+    // BME280
+    // ========================================================================
 
-        d.temperature =
-            0.0;
+    if (bmeAvailable) {
 
+        data.temperature =
+            bme.readTemperature();
 
-        d.airHumidity =
-            0.0;
+        data.airHumidity =
+            bme.readHumidity();
+
+        if (
+            isnan(data.temperature) ||
+            isnan(data.airHumidity)
+        ) {
+
+            Serial.println(
+                "[ERROR] BME280 reading failed."
+            );
+
+            data.temperature =
+                0.0f;
+
+            data.airHumidity =
+                0.0f;
+        }
+
+    } else {
+
+        data.temperature =
+            0.0f;
+
+        data.airHumidity =
+            0.0f;
     }
 
+    data.valid =
+        false;
 
-    return d;
+    return data;
 }
 
-
 // ============================================================================
-// SOIL MOISTURE
+// SOIL MOISTURE - THREE SENSORS
 // ============================================================================
 
-float readSoilHumidityPercent() {
+void readSoilHumidityPercent(
+    float& moisture1,
+    float& moisture2,
+    float& moisture3
+) {
 
-    long sumRaw = 0;
+    long sumRaw1 = 0;
+    long sumRaw2 = 0;
+    long sumRaw3 = 0;
 
-
-    // Average 10 readings
+    const int samples = 10;
 
     for (
         int i = 0;
-        i < 10;
+        i < samples;
         i++
     ) {
 
-        sumRaw +=
+        sumRaw1 +=
             analogRead(
-                PIN_SOIL_MOISTURE
+                PIN_SOIL_MOISTURE_1
             );
 
+        sumRaw2 +=
+            analogRead(
+                PIN_SOIL_MOISTURE_2
+            );
+
+        sumRaw3 +=
+            analogRead(
+                PIN_SOIL_MOISTURE_3
+            );
 
         delayMicroseconds(100);
     }
 
+    int rawValue1 =
+        sumRaw1 / samples;
 
-    int rawValue =
-        sumRaw / 10;
+    int rawValue2 =
+        sumRaw2 / samples;
 
+    int rawValue3 =
+        sumRaw3 / samples;
 
     Serial.print(
-        "Soil raw ADC value: "
+        "Soil ADC: "
+    );
+
+    Serial.print(
+        rawValue1
+    );
+
+    Serial.print(
+        " | "
+    );
+
+    Serial.print(
+        rawValue2
+    );
+
+    Serial.print(
+        " | "
     );
 
     Serial.println(
-        rawValue
+        rawValue3
     );
 
+    float denominator =
+        (float)(
+            SOIL_DRY_VALUE -
+            SOIL_WET_VALUE
+        );
 
-    float moisture =
+    if (
+        denominator == 0.0f
+    ) {
+
+        moisture1 = 0.0f;
+        moisture2 = 0.0f;
+        moisture3 = 0.0f;
+
+        return;
+    }
+
+    moisture1 =
         (
             (
-                float
-            )(
-                SOIL_DRY_VALUE -
-                rawValue
+                float(
+                    SOIL_DRY_VALUE -
+                    rawValue1
+                )
             )
             /
-            (
-                float
-            )(
-                SOIL_DRY_VALUE -
-                SOIL_WET_VALUE
-            )
+            denominator
         )
-        * 100.0;
+        * 100.0f;
 
+    moisture2 =
+        (
+            (
+                float(
+                    SOIL_DRY_VALUE -
+                    rawValue2
+                )
+            )
+            /
+            denominator
+        )
+        * 100.0f;
 
-    return constrain(
-        moisture,
-        0.0,
-        100.0
-    );
+    moisture3 =
+        (
+            (
+                float(
+                    SOIL_DRY_VALUE -
+                    rawValue3
+                )
+            )
+            /
+            denominator
+        )
+        * 100.0f;
+
+    moisture1 =
+        constrain(
+            moisture1,
+            0.0f,
+            100.0f
+        );
+
+    moisture2 =
+        constrain(
+            moisture2,
+            0.0f,
+            100.0f
+        );
+
+    moisture3 =
+        constrain(
+            moisture3,
+            0.0f,
+            100.0f
+        );
 }
 
-
 // ============================================================================
-// WATER LEVEL
+// WATER LEVEL - US-100
 // ============================================================================
 
 float readWaterLevelPercent() {
+
+    float previousLevel =
+        currentData.waterLevel;
 
     for (
         int attempt = 0;
@@ -949,16 +953,13 @@ float readWaterLevelPercent() {
         attempt++
     ) {
 
-
-        // Trigger
-
+        // Trigger pulse
         digitalWrite(
             PIN_ULTRASONIC_TRIG,
             LOW
         );
 
         delayMicroseconds(2);
-
 
         digitalWrite(
             PIN_ULTRASONIC_TRIG,
@@ -967,172 +968,346 @@ float readWaterLevelPercent() {
 
         delayMicroseconds(10);
 
-
         digitalWrite(
             PIN_ULTRASONIC_TRIG,
             LOW
         );
 
-
-        // Echo
-
-        long duration =
+        // Read echo
+        unsigned long duration =
             pulseIn(
                 PIN_ULTRASONIC_ECHO,
                 HIGH,
-                25000
+                25000UL
             );
 
+        if (duration > 0) {
 
-        if (
-            duration > 0
-        ) {
-
+            // Distance in cm
             float distance =
                 duration *
-                0.0343 /
-                2.0;
+                0.0343f /
+                2.0f;
 
+            Serial.print(
+                "Tank distance: "
+            );
 
+            Serial.print(
+                distance,
+                2
+            );
+
+            Serial.println(
+                " cm"
+            );
+
+            // Validate distance
             if (
-                distance >= 2.0 &&
-                distance <= 400.0
+                distance >= 2.0f &&
+                distance <= 400.0f
             ) {
 
+                // ============================================================
+                // Convert distance to percentage
+                //
+                // 18.69 cm = 0%
+                // 8.21 cm  = 100%
+                // ============================================================
 
-                float level =
+                float denominator =
+                    EMPTY_DISTANCE -
+                    FULL_DISTANCE;
+
+                if (
+                    denominator <= 0.0f
+                ) {
+
+                    Serial.println(
+                        "[ERROR] Invalid tank calibration."
+                    );
+
+                    return previousLevel;
+                }
+
+                float levelPercent =
                     (
                         (
                             EMPTY_DISTANCE -
                             distance
                         )
                         /
-                        (
-                            EMPTY_DISTANCE -
-                            FULL_DISTANCE
-                        )
+                        denominator
                     )
-                    * 100.0;
+                    * 100.0f;
 
-
-                level =
+                levelPercent =
                     constrain(
-                        level,
-                        0.0,
-                        100.0
+                        levelPercent,
+                        0.0f,
+                        100.0f
                     );
 
+                // ============================================================
+                // Calculate volume
+                // ============================================================
+
+                float volumeLiters =
+                    calculateVolumeLiters(
+                        levelPercent
+                    );
 
                 Serial.print(
-                    "Distance: "
+                    "Tank level: "
                 );
 
                 Serial.print(
-                    distance,
-                    2
-                );
-
-                Serial.print(
-                    " cm | Level: "
-                );
-
-                Serial.print(
-                    level,
+                    levelPercent,
                     1
                 );
 
-                Serial.println(
-                    " %"
+                Serial.print(
+                    "% | Volume: "
                 );
 
+                Serial.print(
+                    volumeLiters,
+                    2
+                );
 
-                return level;
+                Serial.println(
+                    " L"
+                );
+
+                return levelPercent;
             }
         }
 
+        Serial.println(
+            "US-100: measurement failed - retrying..."
+        );
 
         delay(200);
     }
 
-
     Serial.println(
-        "US-100: No valid measurement"
+        "US-100: all measurements failed - keeping previous level."
     );
 
-
-    // Keep previous valid value
-
-    return currentData.waterLevel;
+    return previousLevel;
 }
 
-
 // ============================================================================
-// VALIDATE SENSOR DATA
+// CALCULATE VOLUME
 // ============================================================================
 
-bool validateData(
-    const SensorData& d
+float calculateVolumeLiters(
+    float waterLevelPercent
 ) {
 
     if (
-        d.soilHumidity < 0 ||
-        d.soilHumidity > 100
+        TANK_CAPACITY_LITERS <= 0.0f
     ) {
 
-        return false;
+        return 0.0f;
     }
 
+    waterLevelPercent =
+        constrain(
+            waterLevelPercent,
+            0.0f,
+            100.0f
+        );
 
+    float volume =
+        (
+            waterLevelPercent /
+            100.0f
+        )
+        *
+        TANK_CAPACITY_LITERS;
+
+    return volume;
+}
+
+// ============================================================================
+// DATA VALIDATION
+// ============================================================================
+
+bool validateData(
+    const SensorData& data
+) {
+
+    // Zone 1
     if (
-        d.waterLevel < 0 ||
-        d.waterLevel > 100
+        data.zone1.soilHumidity < 0.0f ||
+        data.zone1.soilHumidity > 100.0f
     ) {
 
         return false;
     }
 
-
+    // Zone 2
     if (
-        d.temperature < -40 ||
-        d.temperature > 85
+        data.zone2.soilHumidity < 0.0f ||
+        data.zone2.soilHumidity > 100.0f
     ) {
 
         return false;
     }
 
-
+    // Zone 3
     if (
-        d.airHumidity < 0 ||
-        d.airHumidity > 100
+        data.zone3.soilHumidity < 0.0f ||
+        data.zone3.soilHumidity > 100.0f
     ) {
 
         return false;
     }
 
+    // Water level
+    if (
+        data.waterLevel < 0.0f ||
+        data.waterLevel > 100.0f
+    ) {
+
+        return false;
+    }
+
+    // Volume
+    if (
+        data.volumeLiters < 0.0f ||
+        data.volumeLiters > TANK_CAPACITY_LITERS
+    ) {
+
+        return false;
+    }
+
+    // Temperature
+    if (
+        data.temperature < -40.0f ||
+        data.temperature > 85.0f
+    ) {
+
+        return false;
+    }
+
+    // Air humidity
+    if (
+        data.airHumidity < 0.0f ||
+        data.airHumidity > 100.0f
+    ) {
+
+        return false;
+    }
 
     return true;
 }
-
 
 // ============================================================================
 // PRINT SENSOR DATA
 // ============================================================================
 
 void printSensorData(
-    const SensorData& d
+    const SensorData& data
 ) {
 
+    Serial.println();
     Serial.println(
-        "--- SENSOR DATA ---"
+        "--------------- SENSOR DATA ---------------"
     );
 
-
+    // Zone 1
     Serial.print(
-        "Soil Humidity: "
+        "Zone 1 - "
     );
 
     Serial.print(
-        d.soilHumidity,
+        data.zone1.plant
+    );
+
+    Serial.print(
+        " - Soil: "
+    );
+
+    Serial.print(
+        data.zone1.soilHumidity,
+        1
+    );
+
+    Serial.print(
+        "% | Valve: "
+    );
+
+    Serial.println(
+        data.zone1.valveOpen
+            ? "ON"
+            : "OFF"
+    );
+
+    // Zone 2
+    Serial.print(
+        "Zone 2 - "
+    );
+
+    Serial.print(
+        data.zone2.plant
+    );
+
+    Serial.print(
+        " - Soil: "
+    );
+
+    Serial.print(
+        data.zone2.soilHumidity,
+        1
+    );
+
+    Serial.print(
+        "% | Valve: "
+    );
+
+    Serial.println(
+        data.zone2.valveOpen
+            ? "ON"
+            : "OFF"
+    );
+
+    // Zone 3
+    Serial.print(
+        "Zone 3 - "
+    );
+
+    Serial.print(
+        data.zone3.plant
+    );
+
+    Serial.print(
+        " - Soil: "
+    );
+
+    Serial.print(
+        data.zone3.soilHumidity,
+        1
+    );
+
+    Serial.print(
+        "% | Valve: "
+    );
+
+    Serial.println(
+        data.zone3.valveOpen
+            ? "ON"
+            : "OFF"
+    );
+
+    // Tank level
+    Serial.print(
+        "Tank level: "
+    );
+
+    Serial.print(
+        data.waterLevel,
         1
     );
 
@@ -1140,13 +1315,41 @@ void printSensorData(
         "%"
     );
 
-
+    // Tank volume
     Serial.print(
-        "Water Level:   "
+        "Tank volume: "
     );
 
     Serial.print(
-        d.waterLevel,
+        data.volumeLiters,
+        2
+    );
+
+    Serial.println(
+        " L"
+    );
+
+    // Temperature
+    Serial.print(
+        "Temperature: "
+    );
+
+    Serial.print(
+        data.temperature,
+        1
+    );
+
+    Serial.println(
+        " C"
+    );
+
+    // Air humidity
+    Serial.print(
+        "Air humidity: "
+    );
+
+    Serial.print(
+        data.airHumidity,
         1
     );
 
@@ -1154,37 +1357,9 @@ void printSensorData(
         "%"
     );
 
-
+    // Pump
     Serial.print(
-        "Temperature:   "
-    );
-
-    Serial.print(
-        d.temperature,
-        1
-    );
-
-    Serial.println(
-        " °C"
-    );
-
-
-    Serial.print(
-        "Air Humidity:  "
-    );
-
-    Serial.print(
-        d.airHumidity,
-        1
-    );
-
-    Serial.println(
-        "%"
-    );
-
-
-    Serial.print(
-        "Pump:          "
+        "Pump: "
     );
 
     Serial.println(
@@ -1193,48 +1368,13 @@ void printSensorData(
             : "OFF"
     );
 
-
-    Serial.print(
-        "Valve 1:       "
-    );
-
     Serial.println(
-        valve1Running
-            ? "ON"
-            : "OFF"
-    );
-
-
-    Serial.print(
-        "Valve 2:       "
-    );
-
-    Serial.println(
-        valve2Running
-            ? "ON"
-            : "OFF"
-    );
-
-
-    Serial.print(
-        "Valve 3:       "
-    );
-
-    Serial.println(
-        valve3Running
-            ? "ON"
-            : "OFF"
-    );
-
-
-    Serial.println(
-        "-------------------"
+        "-------------------------------------------"
     );
 }
 
-
 // ============================================================================
-// WIFI CONNECTION
+// WIFI
 // ============================================================================
 
 void connectWiFi() {
@@ -1247,41 +1387,38 @@ void connectWiFi() {
         return;
     }
 
-
+    Serial.println();
     Serial.println(
-        "\nConnecting to Wi-Fi..."
+        "Connecting to Wi-Fi..."
     );
-
 
     WiFi.mode(
         WIFI_STA
     );
-
 
     WiFi.begin(
         WIFI_SSID,
         WIFI_PASSWORD
     );
 
-
     int attempts = 0;
 
-
     while (
-        WiFi.status() != WL_CONNECTED &&
+        WiFi.status() !=
+        WL_CONNECTED &&
         attempts < 20
     ) {
 
         delay(500);
 
-        Serial.print(".");
+        Serial.print(
+            "."
+        );
 
         attempts++;
     }
 
-
     Serial.println();
-
 
     if (
         WiFi.status() ==
@@ -1292,11 +1429,9 @@ void connectWiFi() {
             "[OK] Wi-Fi connected."
         );
 
-
         Serial.print(
-            "ESP32 IP: "
+            "IP: "
         );
-
 
         Serial.println(
             WiFi.localIP()
@@ -1309,7 +1444,6 @@ void connectWiFi() {
         );
     }
 }
-
 
 // ============================================================================
 // MQTT CONNECTION
@@ -1324,20 +1458,23 @@ void connectMQTT() {
         return;
     }
 
+    if (
+        WiFi.status() !=
+        WL_CONNECTED
+    ) {
 
+        return;
+    }
+
+    Serial.println();
     Serial.println(
-        "\nConnecting to MQTT broker..."
+        "Connecting to MQTT..."
     );
 
-
-    bool connected =
-        false;
-
+    bool connected = false;
 
     if (
-        strlen(
-            MQTT_USERNAME
-        ) > 0
+        strlen(MQTT_USERNAME) > 0
     ) {
 
         connected =
@@ -1355,58 +1492,50 @@ void connectMQTT() {
             );
     }
 
-
     if (connected) {
 
         Serial.println(
-            "[OK] MQTT connected!"
+            "[OK] MQTT connected."
         );
 
+        // Subscribe zone commands
+        mqttClient.subscribe(
+            TOPIC_ZONE1_COMMAND
+        );
 
-        // ====================================================================
-        // SUBSCRIBE - PUMP
-        // ====================================================================
+        mqttClient.subscribe(
+            TOPIC_ZONE2_COMMAND
+        );
 
+        mqttClient.subscribe(
+            TOPIC_ZONE3_COMMAND
+        );
+
+        // Subscribe pump command
         mqttClient.subscribe(
             TOPIC_PUMP_COMMAND
         );
 
+        // Publish current state
+        publishAllZoneStates();
 
-        // ====================================================================
-        // SUBSCRIBE - VALVES
-        // ====================================================================
+        publishPumpState();
 
-        mqttClient.subscribe(
-            TOPIC_VALVE1_COMMAND
-        );
+        publishTankState();
 
-        mqttClient.subscribe(
-            TOPIC_VALVE2_COMMAND
-        );
-
-        mqttClient.subscribe(
-            TOPIC_VALVE3_COMMAND
-        );
-
-
-        // Publish current states
-
-        publishAllActuatorStatus();
-
+        publishEnvironmentState();
 
     } else {
 
         Serial.print(
-            "[ERROR] MQTT failed, state = "
+            "[ERROR] MQTT failed. State = "
         );
-
 
         Serial.println(
             mqttClient.state()
         );
     }
 }
-
 
 // ============================================================================
 // MQTT CALLBACK
@@ -1418,8 +1547,10 @@ void mqttCallback(
     unsigned int length
 ) {
 
-    String message = "";
+    String receivedTopic =
+        String(topic);
 
+    String message;
 
     for (
         unsigned int i = 0;
@@ -1431,48 +1562,40 @@ void mqttCallback(
             (char)payload[i];
     }
 
-
     message.trim();
 
-    message.toUpperCase();
+    String upperMessage =
+        message;
 
-
-    String receivedTopic =
-        String(topic);
-
+    upperMessage.toUpperCase();
 
     Serial.println();
-
     Serial.println(
-        "================================"
+        "================ MQTT COMMAND ================"
     );
 
-
     Serial.print(
-        "[MQTT TOPIC] "
+        "Topic: "
     );
 
     Serial.println(
         receivedTopic
     );
 
-
     Serial.print(
-        "[MQTT COMMAND] "
+        "Payload: "
     );
 
     Serial.println(
         message
     );
 
-
     Serial.println(
-        "================================"
+        "==============================================="
     );
 
-
     // ========================================================================
-    // PUMP
+    // PUMP COMMAND
     // ========================================================================
 
     if (
@@ -1480,136 +1603,255 @@ void mqttCallback(
         TOPIC_PUMP_COMMAND
     ) {
 
-
         if (
-            message == "ON"
+            upperMessage ==
+            "ON"
         ) {
-
-            // Safety check
-
-            if (
-                currentData.waterLevel <
-                WATER_LEVEL_LOW_PCT
-            ) {
-
-                publishAlert(
-                    "pump_blocked",
-                    "high",
-                    "Pump ON refused - Water level under 30%"
-                );
-
-
-                Serial.println(
-                    "[REJECTED] Pump cannot start."
-                );
-
-
-                return;
-            }
-
 
             startPump();
 
-
         } else if (
-            message == "OFF"
+            upperMessage ==
+            "OFF"
         ) {
 
             stopPump();
-        }
 
+        } else {
+
+            publishAlert(
+                "invalid_command",
+                "medium",
+                "Invalid pump command. Use ON or OFF."
+            );
+        }
 
         return;
     }
 
-
     // ========================================================================
-    // VALVE 1
+    // ZONE 1
     // ========================================================================
 
     if (
         receivedTopic ==
-        TOPIC_VALVE1_COMMAND
+        TOPIC_ZONE1_COMMAND
     ) {
 
-
-        if (
-            message == "ON"
-        ) {
-
-            openValve(1);
-
-        } else if (
-            message == "OFF"
-        ) {
-
-            closeValve(1);
-        }
-
+        handleZoneCommand(
+            1,
+            upperMessage
+        );
 
         return;
     }
 
-
     // ========================================================================
-    // VALVE 2
+    // ZONE 2
     // ========================================================================
 
     if (
         receivedTopic ==
-        TOPIC_VALVE2_COMMAND
+        TOPIC_ZONE2_COMMAND
     ) {
 
-
-        if (
-            message == "ON"
-        ) {
-
-            openValve(2);
-
-        } else if (
-            message == "OFF"
-        ) {
-
-            closeValve(2);
-        }
-
+        handleZoneCommand(
+            2,
+            upperMessage
+        );
 
         return;
     }
 
-
     // ========================================================================
-    // VALVE 3
+    // ZONE 3
     // ========================================================================
 
     if (
         receivedTopic ==
-        TOPIC_VALVE3_COMMAND
+        TOPIC_ZONE3_COMMAND
     ) {
 
-
-        if (
-            message == "ON"
-        ) {
-
-            openValve(3);
-
-        } else if (
-            message == "OFF"
-        ) {
-
-            closeValve(3);
-        }
-
+        handleZoneCommand(
+            3,
+            upperMessage
+        );
 
         return;
     }
 }
 
+// ============================================================================
+// ZONE COMMAND HANDLER
+// ============================================================================
+
+void handleZoneCommand(
+    uint8_t zone,
+    String command
+) {
+
+    // ========================================================================
+    // SIMPLE ON/OFF COMMAND
+    // ========================================================================
+
+    if (
+        command == "ON"
+    ) {
+
+        openZone(
+            zone
+        );
+
+        return;
+    }
+
+    if (
+        command == "OFF"
+    ) {
+
+        closeZone(
+            zone
+        );
+
+        return;
+    }
+
+    // ========================================================================
+    // JSON COMMAND
+    // ========================================================================
+
+    StaticJsonDocument<256> doc;
+
+    DeserializationError error =
+        deserializeJson(
+            doc,
+            command
+        );
+
+    if (error) {
+
+        publishAlert(
+            "invalid_command",
+            "medium",
+            "Invalid zone command."
+        );
+
+        Serial.println(
+            "[ERROR] Invalid zone JSON."
+        );
+
+        return;
+    }
+
+    // ========================================================================
+    // VALVE
+    // ========================================================================
+
+    if (
+        doc.containsKey("valve")
+    ) {
+
+        const char* valve =
+            doc["valve"];
+
+        if (valve != nullptr) {
+
+            String valveCommand =
+                String(valve);
+
+            valveCommand.toUpperCase();
+
+            if (
+                valveCommand == "ON"
+            ) {
+
+                openZone(
+                    zone
+                );
+
+            } else if (
+                valveCommand == "OFF"
+            ) {
+
+                closeZone(
+                    zone
+                );
+            }
+        }
+    }
+
+    // ========================================================================
+    // IRRIGATION
+    // ========================================================================
+
+    if (
+        doc.containsKey("irrigation")
+    ) {
+
+        const char* irrigation =
+            doc["irrigation"];
+
+        if (irrigation != nullptr) {
+
+            String irrigationCommand =
+                String(irrigation);
+
+            irrigationCommand.toUpperCase();
+
+            if (
+                irrigationCommand == "ON"
+            ) {
+
+                openZone(
+                    zone
+                );
+
+            } else if (
+                irrigationCommand == "OFF"
+            ) {
+
+                closeZone(
+                    zone
+                );
+            }
+        }
+    }
+
+    // ========================================================================
+    // DURATION
+    // ========================================================================
+
+    if (
+        doc.containsKey("duration")
+    ) {
+
+        unsigned long duration =
+            doc["duration"];
+
+        Serial.print(
+            "[ZONE] Requested duration: "
+        );
+
+        Serial.print(
+            duration
+        );
+
+        Serial.println(
+            " seconds"
+        );
+
+        Serial.println(
+            "[ZONE] Duration is informational only."
+        );
+
+        Serial.println(
+            "[ZONE] Global 5-minute pump safety remains active."
+        );
+    }
+}
 
 // ============================================================================
-// RELAY CONTROL
+// RELAY
 // ============================================================================
 
 void setRelay(
@@ -1617,79 +1859,89 @@ void setRelay(
     bool state
 ) {
 
-    digitalWrite(
-        pin,
-
+    if (
         RELAY_ACTIVE_HIGH
-            ?
-            (
-                state
-                    ? HIGH
-                    : LOW
-            )
-            :
-            (
-                state
-                    ? LOW
-                    : HIGH
-            )
-    );
+    ) {
+
+        digitalWrite(
+            pin,
+            state
+                ? HIGH
+                : LOW
+        );
+
+    } else {
+
+        digitalWrite(
+            pin,
+            state
+                ? LOW
+                : HIGH
+        );
+    }
 }
 
-
 // ============================================================================
-// START PUMP
+// PUMP START
 // ============================================================================
 
 void startPump() {
 
-    if (
-        pumpRunning
-    ) {
+    if (pumpRunning) {
+
+        Serial.println(
+            "[PUMP] Already ON."
+        );
 
         return;
     }
 
+    // ========================================================================
+    // WATER LEVEL SAFETY
+    // ========================================================================
 
-    // Safety
-
-    if (currentData.waterLevel <WATER_LEVEL_LOW_PCT ) {
+    if (
+        currentData.waterLevel
+        < WATER_LEVEL_LOW_PCT
+    ) {
 
         publishAlert(
             "pump_blocked",
             "high",
-            "Pump blocked - water level too low"
+            "Pump cannot start because tank level is below 30%."
         );
 
+        Serial.println(
+            "[PUMP] START BLOCKED - water level too low."
+        );
 
         return;
     }
 
+    // ========================================================================
+    // START PUMP
+    // ========================================================================
 
     setRelay(
         PIN_PUMP_RELAY,
         true
     );
 
-
-    pumpRunning = true;
-
+    pumpRunning =
+        true;
 
     pumpStartMillis =
         millis();
 
-
-    publishPumpStatus();
-
+    publishPumpState();
 
     Serial.println(
         "[PUMP] ON"
     );
 }
 
-
 // ============================================================================
-// STOP PUMP
+// PUMP STOP
 // ============================================================================
 
 void stopPump() {
@@ -1699,366 +1951,266 @@ void stopPump() {
         false
     );
 
-
     pumpRunning =
         false;
 
+    pumpStartMillis =
+        0;
 
-    // IMPORTANT:
-    // Pump OFF = all valves OFF
+    // Pump OFF => all zones OFF
+    closeAllZones();
 
-    closeAllValves();
-
-
-    publishPumpStatus();
-
+    publishPumpState();
 
     Serial.println(
         "[PUMP] OFF"
     );
 }
 
+// ============================================================================
+// ZONE STATE
+// ============================================================================
+
+bool isZoneOpen(
+    uint8_t zone
+) {
+
+    if (zone == 1) {
+
+        return currentData.zone1.valveOpen;
+    }
+
+    if (zone == 2) {
+
+        return currentData.zone2.valveOpen;
+    }
+
+    if (zone == 3) {
+
+        return currentData.zone3.valveOpen;
+    }
+
+    return false;
+}
 
 // ============================================================================
-// OPEN VALVE
+// SET ZONE VALVE
 // ============================================================================
 
-void openValve(int valve) {
+void setZoneValve(
+    uint8_t zone,
+    bool state
+) {
+
+    if (zone == 1) {
+
+        setRelay(
+            PIN_VALVE1_RELAY,
+            state
+        );
+
+        currentData.zone1.valveOpen =
+            state;
+
+    } else if (zone == 2) {
+
+        setRelay(
+            PIN_VALVE2_RELAY,
+            state
+        );
+
+        currentData.zone2.valveOpen =
+            state;
+
+    } else if (zone == 3) {
+
+        setRelay(
+            PIN_VALVE3_RELAY,
+            state
+        );
+
+        currentData.zone3.valveOpen =
+            state;
+    }
+}
+
+// ============================================================================
+// OPEN ZONE
+// ============================================================================
+
+void openZone(
+    uint8_t zone
+) {
 
     // ========================================================================
-    // PUMP MUST BE ON
+    // VALID ZONE
     // ========================================================================
 
     if (
-        !pumpRunning
+        zone < 1 ||
+        zone > 3
     ) {
 
-        publishAlert(
-            "valve_blocked",
-            "medium",
-            "Valve command refused - Pump is OFF"
-        );
-
-
-        Serial.print(
-            "[REJECTED] Valve "
-        );
-
-        Serial.print(
-            valve
-        );
-
         Serial.println(
-            " - Pump is OFF."
+            "[ZONE] Invalid zone."
         );
-
 
         return;
     }
 
+    // ========================================================================
+    // PUMP DEPENDENCY
+    // ========================================================================
+
+    if (!pumpRunning) {
+
+        publishAlert(
+            "zone_blocked",
+            "medium",
+            "Zone cannot open because pump is OFF."
+        );
+
+        Serial.print(
+            "[ZONE "
+        );
+
+        Serial.print(
+            zone
+        );
+
+        Serial.println(
+            "] BLOCKED - pump is OFF."
+        );
+
+        return;
+    }
 
     // ========================================================================
     // WATER SAFETY
     // ========================================================================
 
     if (
-        currentData.waterLevel <
-        WATER_LEVEL_CRITICAL_PCT
+        currentData.waterLevel
+        < WATER_LEVEL_CRITICAL_PCT
     ) {
 
         emergencyShutdown();
 
+        return;
+    }
+
+    // ========================================================================
+    // OPEN VALVE
+    // ========================================================================
+
+    setZoneValve(
+        zone,
+        true
+    );
+
+    publishZoneState(
+        zone
+    );
+
+    Serial.print(
+        "[ZONE "
+    );
+
+    Serial.print(
+        zone
+    );
+
+    Serial.println(
+        "] VALVE ON"
+    );
+}
+
+// ============================================================================
+// CLOSE ZONE
+// ============================================================================
+
+void closeZone(
+    uint8_t zone
+) {
+
+    if (
+        zone < 1 ||
+        zone > 3
+    ) {
+
+        Serial.println(
+            "[ZONE] Invalid zone."
+        );
 
         return;
     }
 
+    setZoneValve(
+        zone,
+        false
+    );
 
-    // ========================================================================
-    // VALVE 1 - TOMATO
-    // ========================================================================
+    publishZoneState(
+        zone
+    );
 
-    if (
-        valve == 1
-    ) {
+    Serial.print(
+        "[ZONE "
+    );
 
-        setRelay(
-            PIN_VALVE1_RELAY,
-            true
-        );
+    Serial.print(
+        zone
+    );
 
-
-        valve1Running =
-            true;
-
-
-        publishValveStatus(1);
-
-
-        Serial.println(
-            "[VALVE 1] ON - TOMATO"
-        );
-    }
-
-
-    // ========================================================================
-    // VALVE 2 - MINT
-    // ========================================================================
-
-    else if (
-        valve == 2
-    ) {
-
-        setRelay(
-            PIN_VALVE2_RELAY,
-            true
-        );
-
-
-        valve2Running =
-            true;
-
-
-        publishValveStatus(2);
-
-
-        Serial.println(
-            "[VALVE 2] ON - MINT"
-        );
-    }
-
-
-    // ========================================================================
-    // VALVE 3 - ONION
-    // ========================================================================
-
-    else if (
-        valve == 3
-    ) {
-
-        setRelay(
-            PIN_VALVE3_RELAY,
-            true
-        );
-
-
-        valve3Running =
-            true;
-
-
-        publishValveStatus(3);
-
-
-        Serial.println(
-            "[VALVE 3] ON - ONION"
-        );
-    }
+    Serial.println(
+        "] VALVE OFF"
+    );
 }
 
-
 // ============================================================================
-// CLOSE VALVE
-// ============================================================================
-
-void closeValve( int valve) {
-
-
-    // Valve 1
-
-    if (
-        valve == 1
-    ) {
-
-        setRelay(
-            PIN_VALVE1_RELAY,
-            false
-        );
-
-
-        valve1Running =
-            false;
-
-
-        publishValveStatus(1);
-
-
-        Serial.println(
-            "[VALVE 1] OFF"
-        );
-    }
-
-
-    // Valve 2
-
-    else if (
-        valve == 2
-    ) {
-
-        setRelay(
-            PIN_VALVE2_RELAY,
-            false
-        );
-
-
-        valve2Running =
-            false;
-
-
-        publishValveStatus(2);
-
-
-        Serial.println(
-            "[VALVE 2] OFF"
-        );
-    }
-
-
-    // Valve 3
-
-    else if (
-        valve == 3
-    ) {
-
-        setRelay(
-            PIN_VALVE3_RELAY,
-            false
-        );
-
-
-        valve3Running =
-            false;
-
-
-        publishValveStatus(3);
-
-
-        Serial.println(
-            "[VALVE 3] OFF"
-        );
-    }
-}
-
-
-// ============================================================================
-// CLOSE ALL VALVES
+// CLOSE ALL ZONES
 // ============================================================================
 
-void closeAllValves() {
+void closeAllZones() {
 
     setRelay(
         PIN_VALVE1_RELAY,
         false
     );
 
-
     setRelay(
         PIN_VALVE2_RELAY,
         false
     );
-
 
     setRelay(
         PIN_VALVE3_RELAY,
         false
     );
 
-
-    valve1Running =
+    currentData.zone1.valveOpen =
         false;
 
-
-    valve2Running =
+    currentData.zone2.valveOpen =
         false;
 
-
-    valve3Running =
+    currentData.zone3.valveOpen =
         false;
 
+    if (
+        mqttClient.connected()
+    ) {
 
-    publishValveStatus(1);
-
-    publishValveStatus(2);
-
-    publishValveStatus(3);
-
+        publishAllZoneStates();
+    }
 
     Serial.println(
-        "[VALVES] ALL OFF"
+        "[ZONES] ALL VALVES OFF"
     );
 }
 
-
 // ============================================================================
-// EMERGENCY SHUTDOWN
-// ============================================================================
-
-void emergencyShutdown() {
-
-    Serial.println(
-        "[EMERGENCY] Irrigation shutdown!"
-    );
-
-
-    // Pump OFF
-
-    setRelay(
-        PIN_PUMP_RELAY,
-        false
-    );
-
-
-    pumpRunning =
-        false;
-
-
-    // Valves OFF
-
-    setRelay(
-        PIN_VALVE1_RELAY,
-        false
-    );
-
-
-    setRelay(
-        PIN_VALVE2_RELAY,
-        false
-    );
-
-
-    setRelay(
-        PIN_VALVE3_RELAY,
-        false
-    );
-
-
-    valve1Running =
-        false;
-
-
-    valve2Running =
-        false;
-
-
-    valve3Running =
-        false;
-
-
-    // Publish states
-
-    publishAllActuatorStatus();
-
-
-    // Alert
-
-    publishAlert(
-        "water_critical",
-        "high",
-        "Critical tank level - Pump and all valves stopped- risq to crash the pump"
-    );
-}
-
-
-// ============================================================================
-// PUMP SAFETY TIMEOUT
+// PUMP SAFETY
 // ============================================================================
 
 void checkPumpSafety() {
@@ -2068,116 +2220,98 @@ void checkPumpSafety() {
         (
             millis() -
             pumpStartMillis
-        ) >
-        PUMP_MAX_RUNTIME_MS
+        ) >= PUMP_MAX_RUNTIME_MS
     ) {
 
-
         stopPump();
-
 
         publishAlert(
             "pump_timeout",
             "high",
-            "Pump automatically stopped after 5 minutes" // just for sefty perpus
+            "Pump automatically stopped after 5 minutes."
         );
-
 
         Serial.println(
-            "[SAFETY] Pump timeout!"
+            "[SAFETY] Pump timeout."
         );
     }
 }
 
-
 // ============================================================================
-// PUBLISH INDIVIDUAL SENSOR DATA EVERY 2SEC
+// EMERGENCY SHUTDOWN
 // ============================================================================
 
-void publishSensorData(
-    const SensorData& d
-) {
+void emergencyShutdown() {
 
-    if (
-        !mqttClient.connected()
-    ) {
-
-        return;
-    }
-
-
-    char tempBuf[16]; // booking a space in memory to store transforme floats to c-string to fit Json structure 
-
-    char airHumBuf[16];
-
-    char waterBuf[16];
-
-    char soilBuf[16];
-
-
-    snprintf(
-        tempBuf,
-        sizeof(tempBuf),
-        "%.1f",
-        d.temperature
+    Serial.println();
+    Serial.println(
+        "[EMERGENCY] WATER LEVEL CRITICAL!"
     );
 
+    // ========================================================================
+    // PUMP OFF
+    // ========================================================================
 
-    snprintf(
-        airHumBuf,
-        sizeof(airHumBuf),
-        "%.1f",
-        d.airHumidity
+    setRelay(
+        PIN_PUMP_RELAY,
+        false
     );
 
+    pumpRunning =
+        false;
 
-    snprintf(
-        waterBuf,
-        sizeof(waterBuf),
-        "%.1f",
-        d.waterLevel
+    pumpStartMillis =
+        0;
+
+    // ========================================================================
+    // ALL VALVES OFF
+    // ========================================================================
+
+    setRelay(
+        PIN_VALVE1_RELAY,
+        false
     );
 
-
-    snprintf(
-        soilBuf,
-        sizeof(soilBuf),
-        "%.1f",
-        d.soilHumidity
+    setRelay(
+        PIN_VALVE2_RELAY,
+        false
     );
 
-
-    mqttClient.publish(
-        TOPIC_TEMP,
-        tempBuf
+    setRelay(
+        PIN_VALVE3_RELAY,
+        false
     );
 
+    currentData.zone1.valveOpen =
+        false;
 
-    mqttClient.publish(
-        TOPIC_AIR_HUMIDITY,
-        airHumBuf
-    );
+    currentData.zone2.valveOpen =
+        false;
 
+    currentData.zone3.valveOpen =
+        false;
 
-    mqttClient.publish(
-        TOPIC_WATER_LEVEL,
-        waterBuf
-    );
+    // ========================================================================
+    // MQTT
+    // ========================================================================
 
+    publishPumpState();
 
-    mqttClient.publish(
-        TOPIC_SOIL_HUMIDITY,
-        soilBuf
+    publishAllZoneStates();
+
+    publishAlert(
+        "water_critical",
+        "high",
+        "Critical tank level. Pump and all zones stopped."
     );
 }
 
-
 // ============================================================================
-// PUBLISH COMPLETE SENSOR SNAPSHOT
+// PUBLISH ZONE STATE
 // ============================================================================
 
-void publishSensorSnapshot(
-    const SensorData& d
+void publishZoneState(
+    uint8_t zone
 ) {
 
     if (
@@ -2187,254 +2321,482 @@ void publishSensorSnapshot(
         return;
     }
 
+    ZoneData* z =
+        nullptr;
 
-    // ========================================================================
-    // JSON DOCUMENT
-    // ========================================================================
+    const char* topic =
+        nullptr;
 
-    StaticJsonDocument<768> doc;
+    if (zone == 1) {
 
+        z =
+            &currentData.zone1;
 
-    // ========================================================================
-    // TIMESTAMP
-    // ========================================================================
+        topic =
+            TOPIC_ZONE1_STATE;
 
-    doc["timestamp_ms"] =
-        millis();
+    } else if (zone == 2) {
 
+        z =
+            &currentData.zone2;
 
-    // ========================================================================
-    // SENSORS
-    // ========================================================================
+        topic =
+            TOPIC_ZONE2_STATE;
 
-    doc["temperature"] =
-        d.temperature;
+    } else if (zone == 3) {
 
+        z =
+            &currentData.zone3;
 
-    doc["air_humidity"] =
-        d.airHumidity;
+        topic =
+            TOPIC_ZONE3_STATE;
 
+    } else {
+
+        return;
+    }
+
+    StaticJsonDocument<384> doc;
+
+    doc["device_id"] =
+        DEVICE_ID;
+
+    doc["zone"] =
+        z->id;
+
+    doc["plant"] =
+        z->plant;
 
     doc["soil_humidity"] =
-        d.soilHumidity;
+        z->soilHumidity;
 
-
-    doc["water_level"] =
-        d.waterLevel;
-
-
-    // ========================================================================
-    // ACTUATORS
-    // ========================================================================
+    doc["valve"] =
+        z->valveOpen
+            ? "ON"
+            : "OFF";
 
     doc["pump"] =
         pumpRunning
             ? "ON"
             : "OFF";
 
+    doc["water_level"] =
+        currentData.waterLevel;
 
-    doc["valve_1"] =
-        valve1Running
+    doc["volume_liters"] =
+        currentData.volumeLiters;
+
+    doc["timestamp_ms"] =
+        millis();
+
+    char buffer[384];
+
+    size_t length =
+        serializeJson(
+            doc,
+            buffer,
+            sizeof(buffer)
+        );
+
+    if (
+        length == 0 ||
+        length >= sizeof(buffer)
+    ) {
+
+        Serial.println(
+            "[ERROR] Zone state JSON too large."
+        );
+
+        return;
+    }
+
+    mqttClient.publish(
+        topic,
+        buffer,
+        true
+    );
+}
+
+// ============================================================================
+// PUBLISH ALL ZONE STATES
+// ============================================================================
+
+void publishAllZoneStates() {
+
+    publishZoneState(1);
+
+    publishZoneState(2);
+
+    publishZoneState(3);
+}
+
+// ============================================================================
+// PUBLISH PUMP
+// ============================================================================
+
+void publishPumpState() {
+
+    if (
+        !mqttClient.connected()
+    ) {
+
+        return;
+    }
+
+    StaticJsonDocument<256> doc;
+
+    doc["device_id"] =
+        DEVICE_ID;
+
+    doc["pump"] =
+        pumpRunning
             ? "ON"
             : "OFF";
 
+    doc["water_level"] =
+        currentData.waterLevel;
 
-    doc["valve_2"] =
-        valve2Running
-            ? "ON"
-            : "OFF";
+    doc["volume_liters"] =
+        currentData.volumeLiters;
 
+    doc["timestamp_ms"] =
+        millis();
 
-    doc["valve_3"] =
-        valve3Running
-            ? "ON"
-            : "OFF";
+    char buffer[256];
 
+    size_t length =
+        serializeJson(
+            doc,
+            buffer,
+            sizeof(buffer)
+        );
 
-    // ========================================================================
-    // SAFETY INFORMATION
-    // ========================================================================
+    if (
+        length == 0 ||
+        length >= sizeof(buffer)
+    ) {
 
-    doc["water_critical"] =
-        d.waterLevel <
-        WATER_LEVEL_CRITICAL_PCT;
+        return;
+    }
 
+    mqttClient.publish(
+        TOPIC_PUMP_STATE,
+        buffer,
+        true
+    );
+}
 
-    doc["water_low"] =
-        d.waterLevel <
-        WATER_LEVEL_LOW_PCT;
+// ============================================================================
+// PUBLISH TANK
+// ============================================================================
 
+void publishTankState() {
 
-    // ========================================================================
-    // SYSTEM
-    // ========================================================================
+    if (
+        !mqttClient.connected()
+    ) {
+
+        return;
+    }
+
+    StaticJsonDocument<320> doc;
+
+    doc["device_id"] =
+        DEVICE_ID;
+
+    doc["water_level"] =
+        currentData.waterLevel;
+
+    doc["volume_liters"] =
+        currentData.volumeLiters;
+
+    doc["capacity_liters"] =
+        TANK_CAPACITY_LITERS;
+
+    doc["critical"] =
+        currentData.waterLevel
+        < WATER_LEVEL_CRITICAL_PCT;
+
+    doc["low"] =
+        currentData.waterLevel
+        < WATER_LEVEL_LOW_PCT;
+
+    doc["timestamp_ms"] =
+        millis();
+
+    char buffer[320];
+
+    size_t length =
+        serializeJson(
+            doc,
+            buffer,
+            sizeof(buffer)
+        );
+
+    if (
+        length == 0 ||
+        length >= sizeof(buffer)
+    ) {
+
+        return;
+    }
+
+    mqttClient.publish(
+        TOPIC_TANK_STATE,
+        buffer,
+        true
+    );
+}
+
+// ============================================================================
+// PUBLISH ENVIRONMENT
+// ============================================================================
+
+void publishEnvironmentState() {
+
+    if (
+        !mqttClient.connected()
+    ) {
+
+        return;
+    }
+
+    StaticJsonDocument<256> doc;
+
+    doc["device_id"] =
+        DEVICE_ID;
+
+    doc["temperature"] =
+        currentData.temperature;
+
+    doc["air_humidity"] =
+        currentData.airHumidity;
+
+    doc["timestamp_ms"] =
+        millis();
+
+    char buffer[256];
+
+    size_t length =
+        serializeJson(
+            doc,
+            buffer,
+            sizeof(buffer)
+        );
+
+    if (
+        length == 0 ||
+        length >= sizeof(buffer)
+    ) {
+
+        return;
+    }
+
+    mqttClient.publish(
+        TOPIC_ENVIRONMENT_STATE,
+        buffer,
+        true
+    );
+}
+
+// ============================================================================
+// COMPLETE SYSTEM SNAPSHOT - EVERY 60 SEC
+// ============================================================================
+
+void publishSnapshot() {
+
+    if (
+        !mqttClient.connected()
+    ) {
+
+        return;
+    }
+
+    StaticJsonDocument<2048> doc;
+
+    doc["device_id"] =
+        DEVICE_ID;
 
     doc["system"] =
         "HYDRIVIA";
 
+    doc["timestamp_ms"] =
+        millis();
 
-    doc["data_valid"] =
-        d.valid;
+    // ========================================================================
+    // ZONES
+    // ========================================================================
 
+    JsonArray zones =
+        doc.createNestedArray(
+            "zones"
+        );
+
+    // ------------------------------------------------------------------------
+    // Zone 1
+    // ------------------------------------------------------------------------
+
+    JsonObject zone1 =
+        zones.createNestedObject();
+
+    zone1["id"] =
+        currentData.zone1.id;
+
+    zone1["plant"] =
+        currentData.zone1.plant;
+
+    zone1["soil_humidity"] =
+        currentData.zone1.soilHumidity;
+
+   
+
+    // ------------------------------------------------------------------------
+    // Zone 2
+    // ------------------------------------------------------------------------
+
+    JsonObject zone2 =
+        zones.createNestedObject();
+
+    zone2["id"] =
+        currentData.zone2.id;
+
+    zone2["plant"] =
+        currentData.zone2.plant;
+
+    zone2["soil_humidity"] =
+        currentData.zone2.soilHumidity;
+
+
+    // ------------------------------------------------------------------------
+    // Zone 3
+    // ------------------------------------------------------------------------
+
+    JsonObject zone3 =
+        zones.createNestedObject();
+
+    zone3["id"] =
+        currentData.zone3.id;
+
+    zone3["plant"] =
+        currentData.zone3.plant;
+
+    zone3["soil_humidity"] =
+        currentData.zone3.soilHumidity;
+
+
+    // ========================================================================
+    // TANK
+    // ========================================================================
+
+    JsonObject tank =
+        doc.createNestedObject(
+            "tank"
+        );
+
+    tank["volume_liters"] =
+        currentData.volumeLiters;
+
+    tank["critical"] =
+        currentData.waterLevel
+        < WATER_LEVEL_CRITICAL_PCT;
+
+    tank["low"] =
+        currentData.waterLevel
+        < WATER_LEVEL_LOW_PCT;
+
+    // ========================================================================
+    // ENVIRONMENT
+    // ========================================================================
+
+    JsonObject environment =
+        doc.createNestedObject(
+            "environment"
+        );
+
+    environment["temperature"] =
+        currentData.temperature;
+
+    environment["air_humidity"] =
+        currentData.airHumidity;
+
+    // ========================================================================
+    // SYSTEM STATUS
+    // ========================================================================
+
+    JsonObject systemStatus =
+        doc.createNestedObject(
+            "status"
+        );
+
+    systemStatus["pump"] =
+        pumpRunning
+            ? "ON"
+            : "OFF";
+
+    systemStatus["data_valid"] =
+        currentData.valid;
+
+    systemStatus["wifi_connected"] =
+        WiFi.status() ==
+        WL_CONNECTED;
+
+    systemStatus["mqtt_connected"] =
+        mqttClient.connected();
 
     // ========================================================================
     // SERIALIZE
     // ========================================================================
 
-    char buffer[768];
+    char buffer[2048];
 
+    size_t length =
+        serializeJson(
+            doc,
+            buffer,
+            sizeof(buffer)
+        );
 
-    serializeJson(
-        doc,
-        buffer
-    ); 
+    if (
+        length == 0 ||
+        length >= sizeof(buffer)
+    ) {
 
+        Serial.println(
+            "[ERROR] Snapshot JSON too large."
+        );
 
-    // ========================================================================
-    // MQTT PUBLISH
-    // ========================================================================
+        return;
+    }
 
     bool success =
         mqttClient.publish(
-            TOPIC_SENSOR_SNAPSHOT,
+            TOPIC_SNAPSHOT,
             buffer
         );
-
 
     if (success) {
 
         Serial.println();
-
         Serial.println(
-            "[MQTT] 60s SENSOR SNAPSHOT PUBLISHED"
+            "[MQTT] 60-SECOND SNAPSHOT PUBLISHED"
         );
-
 
         Serial.println(
             buffer
         );
-
 
         Serial.println();
 
     } else {
 
         Serial.println(
-            "[ERROR] Failed to publish sensor snapshot"
+            "[ERROR] Snapshot publish failed."
         );
     }
 }
 
-
 // ============================================================================
-// PUBLISH PUMP STATUS
-// ============================================================================
-
-void publishPumpStatus() {
-
-    if (
-        !mqttClient.connected()
-    ) {
-
-        return;
-    }
-
-
-    mqttClient.publish(
-        TOPIC_PUMP_STATUS,
-
-        pumpRunning
-            ? "ON"
-            : "OFF",
-
-        true
-    );
-}
-
-
-// ============================================================================
-// PUBLISH VALVE STATUS
-// ============================================================================
-
-void publishValveStatus(
-    int valve
-) {
-
-    if (
-        !mqttClient.connected()
-    ) {
-
-        return;
-    }
-
-
-    if (
-        valve == 1
-    ) {
-
-        mqttClient.publish(
-            TOPIC_VALVE1_STATUS,
-
-            valve1Running
-                ? "ON"
-                : "OFF",
-
-            true
-        );
-    }
-
-
-    else if (
-        valve == 2
-    ) {
-
-        mqttClient.publish(
-            TOPIC_VALVE2_STATUS,
-
-            valve2Running
-                ? "ON"
-                : "OFF",
-
-            true
-        );
-    }
-
-
-    else if (
-        valve == 3
-    ) {
-
-        mqttClient.publish(
-            TOPIC_VALVE3_STATUS,
-
-            valve3Running
-                ? "ON"
-                : "OFF",
-
-            true
-        );
-    }
-}
-
-
-// ============================================================================
-// PUBLISH ALL ACTUATOR STATES
-// ============================================================================
-
-void publishAllActuatorStatus() {
-
-    publishPumpStatus();
-
-    publishValveStatus(1);
-
-    publishValveStatus(2);
-
-    publishValveStatus(3);
-}
-
-
-// ============================================================================
-// MQTT ALERT
+// ALERT
 // ============================================================================
 
 void publishAlert(
@@ -2450,30 +2812,39 @@ void publishAlert(
         return;
     }
 
+    StaticJsonDocument<384> doc;
 
-    StaticJsonDocument<256> doc;
+    doc["device_id"] =
+        DEVICE_ID;
 
+    doc["timestamp_ms"] =
+        millis();
 
     doc["type"] =
         type;
 
-
     doc["severity"] =
         severity;
-
 
     doc["message"] =
         message;
 
+    char buffer[384];
 
-    char buffer[256];
+    size_t length =
+        serializeJson(
+            doc,
+            buffer,
+            sizeof(buffer)
+        );
 
+    if (
+        length == 0 ||
+        length >= sizeof(buffer)
+    ) {
 
-    serializeJson(
-        doc,
-        buffer
-    );
-
+        return;
+    }
 
     mqttClient.publish(
         TOPIC_ALERTS,
