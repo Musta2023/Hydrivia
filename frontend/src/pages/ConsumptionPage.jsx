@@ -20,11 +20,13 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import api from '../services/api';
+import { useSocket } from '../context/SocketContext';
 import StatCard from '../components/common/StatCard';
 import StatusBadge from '../components/common/StatusBadge';
 
 export default function ConsumptionPage() {
-  const [analytics, setAnalytics] = useState(null);
+  const { consumption: socketConsumption } = useSocket();
+  const [localAnalytics, setLocalAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
@@ -32,7 +34,7 @@ export default function ConsumptionPage() {
     async function loadAnalytics() {
       try {
         const res = await api.get('/analytics/consumption');
-        setAnalytics(res.data);
+        setLocalAnalytics(res.data);
       } catch (err) {
         console.error('Error fetching analytics:', err);
       } finally {
@@ -41,6 +43,15 @@ export default function ConsumptionPage() {
     }
     loadAnalytics();
   }, []);
+
+  // Merge: socket consumption (real-time totals) takes priority over initial API fetch
+  const analytics = {
+    ...(localAnalytics || {}),
+    totals: socketConsumption?.totals || localAnalytics?.totals || {},
+    byZone: socketConsumption?.byZone?.length ? socketConsumption.byZone : (localAnalytics?.byZone || []),
+    dailyChart: socketConsumption?.dailyChart?.length ? socketConsumption.dailyChart : (localAnalytics?.dailyChart || []),
+    recentCycles: socketConsumption?.recentCycles?.length ? socketConsumption.recentCycles : (localAnalytics?.recentCycles || [])
+  };
 
   const handleExportCSV = async () => {
     setExporting(true);
@@ -61,7 +72,7 @@ export default function ConsumptionPage() {
     }
   };
 
-  const totals = analytics?.totals || {
+  const totals = analytics.totals || {
     todayLiters: 0,
     weekLiters: 0,
     monthLiters: 0,
@@ -97,31 +108,31 @@ export default function ConsumptionPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Consommation Aujourd'hui"
-          value={totals.todayLiters.toFixed(1)}
+          value={(totals.todayLiters || 0).toFixed(1)}
           unit="L"
-          subtitle={`Demande : ${totals.todayRequestedLiters || totals.todayLiters} L`}
+          subtitle={`Demande : ${(totals.todayRequestedLiters || totals.todayLiters || 0).toFixed(1)} L`}
           icon={Droplets}
           highlight
         />
         <StatCard
           title="Consommation 7 Jours"
-          value={totals.weekLiters.toFixed(1)}
+          value={(totals.weekLiters || 0).toFixed(1)}
           unit="L"
           subtitle="Cumul hebdomadaire"
           icon={Calendar}
         />
         <StatCard
           title="Consommation du Mois"
-          value={totals.monthLiters.toFixed(1)}
+          value={(totals.monthLiters || 0).toFixed(1)}
           unit="L"
           subtitle="Cumul mensuel en cours"
           icon={TrendingUp}
         />
         <StatCard
           title="Cycles d'Arrosage"
-          value={totals.totalCycles}
+          value={totals.totalCycles || 0}
           unit="cycles"
-          subtitle={`Total : ${totals.allTimeLiters.toFixed(0)} L distribués`}
+          subtitle={`Total : ${(totals.allTimeLiters || 0).toFixed(0)} L distribués`}
           icon={CheckCircle2}
         />
       </div>

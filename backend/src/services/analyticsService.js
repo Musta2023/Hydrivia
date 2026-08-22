@@ -1,32 +1,24 @@
 import db from '../database/index.js';
 
 export function getConsumptionAnalytics() {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-  
-  const dayOfWeek = now.getDay() || 7; // 1 (Mon) to 7 (Sun)
-  const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1).toISOString();
-  
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
   // 1. Totals
   const todayTotal = db.prepare(`
     SELECT COALESCE(SUM(delivered_liters), 0) as total, COALESCE(SUM(requested_liters), 0) as requested
     FROM irrigation_cycles
-    WHERE start_time >= ?
-  `).get(startOfToday);
+    WHERE date(start_time) = date('now') OR date(start_time) >= date('now', 'start of day')
+  `).get();
 
   const weekTotal = db.prepare(`
     SELECT COALESCE(SUM(delivered_liters), 0) as total, COALESCE(SUM(requested_liters), 0) as requested
     FROM irrigation_cycles
-    WHERE start_time >= ?
-  `).get(startOfWeek);
+    WHERE date(start_time) >= date('now', '-7 days')
+  `).get();
 
   const monthTotal = db.prepare(`
     SELECT COALESCE(SUM(delivered_liters), 0) as total, COALESCE(SUM(requested_liters), 0) as requested
     FROM irrigation_cycles
-    WHERE start_time >= ?
-  `).get(startOfMonth);
+    WHERE date(start_time) >= date('now', 'start of month')
+  `).get();
 
   const allTimeTotal = db.prepare(`
     SELECT COALESCE(SUM(delivered_liters), 0) as total, COUNT(*) as cyclesCount

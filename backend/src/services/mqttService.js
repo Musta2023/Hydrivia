@@ -2,8 +2,12 @@ import mqtt from 'mqtt';
 import { config } from '../config/index.js';
 import { broadcast, registerMqttStatusProvider } from './socketService.js';
 import db from '../database/index.js';
+import { getConsumptionAnalytics } from './analyticsService.js';
 
 let mqttClient = null;
+
+// Track active cycles in memory to accurately calculate delivered water volume
+const activeCycles = {};
 
 // In-Memory Live State Cache
 export const liveState = {
@@ -13,9 +17,9 @@ export const liveState = {
   systemStatus: 'NORMAL', // 'NORMAL', 'IRRIGATING', 'EMERGENCY_STOPPED', 'WARNING'
   
   zones: {
-    1: { id: 1, plant: 'Tomate', soil_humidity: 45.0, valve: 'OFF', watering_active: false, target_moisture: 50, target_liters: 0, progress_pct: 0 },
-    2: { id: 2, plant: 'Menthe', soil_humidity: 52.0, valve: 'OFF', watering_active: false, target_moisture: 50, target_liters: 0, progress_pct: 0 },
-    3: { id: 3, plant: 'Oignon', soil_humidity: 38.0, valve: 'OFF', watering_active: false, target_moisture: 50, target_liters: 0, progress_pct: 0 }
+    1: { id: 1, plant: 'Tomate', soil_humidity: 45.0, valve: 'OFF', watering_active: false, target_moisture: 50, target_liters: 0, delivered_liters: 0, progress_pct: 0 },
+    2: { id: 2, plant: 'Menthe', soil_humidity: 52.0, valve: 'OFF', watering_active: false, target_moisture: 50, target_liters: 0, delivered_liters: 0, progress_pct: 0 },
+    3: { id: 3, plant: 'Oignon', soil_humidity: 38.0, valve: 'OFF', watering_active: false, target_moisture: 50, target_liters: 0, delivered_liters: 0, progress_pct: 0 }
   },
   
   pump: {
@@ -133,11 +137,65 @@ function handleIncomingMessage(topic, payload) {
   if (zoneMatch) {
     const zoneId = parseInt(zoneMatch[1], 10);
     if (liveState.zones[zoneId]) {
+      const prevValve = liveState.zones[zoneId].valve;
+      const newValve = payload.valve || prevValve;
+
+      // 1. If valve switched to ON -> Start tracking active cycle
+      if (prevValve !== 'ON' && newValve === 'ON') {
+        activeCycles[zoneId] = {
+          startTime: Date.now(),
+          zoneId,
+          plant: payload.plant || liveState.zones[zoneId].plant,
+          requestedLiters: liveState.zones[zoneId].target_liters || 30,
+          targetSoilMoisture: liveState.zones[zoneId].target_moisture || 50
+        };
+        liveState.zones[zoneId].watering_active = true;
+      }
+
+      // 2. If valve switched to OFF -> Finalize cycle & calculate delivered volume
+      if (prevValve === 'ON' && newValve === 'OFF' && activeCycles[zoneId]) {
+        const cycle = activeCycles[zoneId];
+        const elapsedMs = Math.max(1000, Date.now() - cycle.startTime);
+        const elapsedMin = elapsedMs / 60000;
+        let deliveredLiters = parseFloat((elapsedMin * 30.0).toFixed(1));
+        if (cycle.requestedLiters > 0 && deliveredLiters > cycle.requestedLiters * 1.05) {
+          deliveredLiters = cycle.requestedLiters;
+        }
+        if (deliveredLiters <= 0) deliveredLiters = 0.5;
+
+        try {
+          db.prepare(`
+            INSERT INTO irrigation_cycles (zone_id, plant, requested_liters, target_soil_moisture, delivered_liters, start_time, end_time, status, reason)
+            VALUES (?, ?, ?, ?, ?, datetime('now', ?), datetime('now'), 'completed', 'Cycle terminé avec succès')
+          `).run(
+            zoneId,
+            cycle.plant,
+            cycle.requestedLiters,
+            cycle.targetSoilMoisture,
+            deliveredLiters,
+            `-${Math.round(elapsedMs / 1000)} seconds`
+          );
+          console.log(`[CONSUMPTION] Cycle enregistré: Zone ${zoneId} (${cycle.plant}) = ${deliveredLiters} L livrés.`);
+        } catch (err) {
+          console.error('[DB] Erreur enregistrement cycle irrigation:', err.message);
+        }
+
+        delete activeCycles[zoneId];
+        liveState.zones[zoneId].watering_active = false;
+        liveState.zones[zoneId].delivered_liters = deliveredLiters;
+
+        // Broadcast live updated consumption to all clients
+        try {
+          const freshAnalytics = getConsumptionAnalytics();
+          broadcast('consumption:update', freshAnalytics);
+        } catch (e) {}
+      }
+
       liveState.zones[zoneId] = {
         ...liveState.zones[zoneId],
         ...payload,
         soil_humidity: payload.soil_humidity !== undefined ? payload.soil_humidity : liveState.zones[zoneId].soil_humidity,
-        valve: payload.valve || liveState.zones[zoneId].valve
+        valve: newValve
       };
       broadcast('telemetry:zone', { zoneId, data: liveState.zones[zoneId] });
       checkSystemStatus();
@@ -201,7 +259,12 @@ function handleIncomingMessage(topic, payload) {
       console.error('[DB] Erreur lors de l\'enregistrement du snapshot:', dbErr.message);
     }
 
-    broadcast('telemetry:snapshot', liveState);
+    try {
+      const consumptionSummary = getConsumptionAnalytics().totals;
+      broadcast('telemetry:snapshot', { ...liveState, consumption: consumptionSummary });
+    } catch (e) {
+      broadcast('telemetry:snapshot', liveState);
+    }
     return;
   }
 
@@ -209,14 +272,38 @@ function handleIncomingMessage(topic, payload) {
   if (topic === 'hydrivia/alerts') {
     liveState.activeAlert = payload;
     
-    // Check if watering completed to log cycle
-    if (payload.type === 'watering_complete') {
+    // Check if watering completed alert was received
+    if (payload.type === 'watering_complete' || payload.type === 'all_zones_complete') {
+      Object.keys(activeCycles).forEach(zId => {
+        const cycle = activeCycles[zId];
+        const elapsedMs = Math.max(1000, Date.now() - cycle.startTime);
+        let deliveredLiters = parseFloat(((elapsedMs / 60000) * 30.0).toFixed(1));
+        if (cycle.requestedLiters > 0 && deliveredLiters > cycle.requestedLiters) {
+          deliveredLiters = cycle.requestedLiters;
+        }
+        if (deliveredLiters <= 0) deliveredLiters = 0.5;
+
+        try {
+          db.prepare(`
+            INSERT INTO irrigation_cycles (zone_id, plant, requested_liters, target_soil_moisture, delivered_liters, start_time, end_time, status, reason)
+            VALUES (?, ?, ?, ?, ?, datetime('now', ?), datetime('now'), 'completed', ?)
+          `).run(
+            cycle.zoneId,
+            cycle.plant,
+            cycle.requestedLiters,
+            cycle.targetSoilMoisture,
+            deliveredLiters,
+            `-${Math.round(elapsedMs / 1000)} seconds`,
+            payload.message || 'Objectif atteint'
+          );
+        } catch (err) {}
+        delete activeCycles[zId];
+      });
+
       try {
-        db.prepare(`
-          INSERT INTO irrigation_cycles (zone_id, plant, requested_liters, target_soil_moisture, delivered_liters, start_time, end_time, status, reason)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?)
-        `).run(1, 'Tomate', 30, 50, 30, new Date(Date.now() - 60000).toISOString(), new Date().toISOString(), payload.message);
-      } catch (err) {}
+        const freshAnalytics = getConsumptionAnalytics();
+        broadcast('consumption:update', freshAnalytics);
+      } catch (e) {}
     }
 
     try {

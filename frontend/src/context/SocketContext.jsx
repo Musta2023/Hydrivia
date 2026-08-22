@@ -25,15 +25,31 @@ export function SocketProvider({ children }) {
 
   const [recentAlert, setRecentAlert] = useState(null);
   const [staleData, setStaleData] = useState(false);
+  const [consumption, setConsumption] = useState({
+    totals: { todayLiters: 0, todayRequestedLiters: 0, weekLiters: 0, monthLiters: 0, allTimeLiters: 0, totalCycles: 0 },
+    byZone: [],
+    dailyChart: [],
+    recentCycles: []
+  });
+
+  const fetchConsumption = async () => {
+    try {
+      const res = await api.get('/analytics/consumption');
+      setConsumption(res.data);
+    } catch (err) {
+      console.warn('Consumption fetch warning:', err.message);
+    }
+  };
 
   useEffect(() => {
     // Initial fetch of live status from REST API
     async function fetchInitialStatus() {
       try {
-        const [zonesRes, tankRes, emergRes] = await Promise.all([
+        const [zonesRes, tankRes, emergRes, analyticsRes] = await Promise.all([
           api.get('/zones'),
           api.get('/tank'),
-          api.get('/emergency/status')
+          api.get('/emergency/status'),
+          api.get('/analytics/consumption').catch(() => ({ data: null }))
         ]);
         
         const zMap = {};
@@ -48,6 +64,9 @@ export function SocketProvider({ children }) {
         }));
 
         setEmergencyStopped(emergRes.data.emergencyStopped);
+        if (analyticsRes && analyticsRes.data) {
+          setConsumption(analyticsRes.data);
+        }
       } catch (err) {
         console.warn('Initial fetch warning:', err.message);
       }
@@ -82,8 +101,16 @@ export function SocketProvider({ children }) {
       if (data.tank) setTelemetry(prev => ({ ...prev, tank: data.tank }));
       if (data.environment) setTelemetry(prev => ({ ...prev, environment: data.environment }));
       if (data.emergencyStopped !== undefined) setEmergencyStopped(data.emergencyStopped);
+      if (data.consumption) {
+        setConsumption(prev => ({ ...prev, totals: data.consumption }));
+      }
       setTelemetry(prev => ({ ...prev, lastSeen: Date.now() }));
       setStaleData(false);
+    });
+
+    newSocket.on('consumption:update', (analyticsData) => {
+      console.log('[WS] Mise à jour temps réel de la consommation:', analyticsData);
+      setConsumption(analyticsData);
     });
 
     newSocket.on('telemetry:zone', ({ zoneId, data }) => {
@@ -109,6 +136,9 @@ export function SocketProvider({ children }) {
 
     newSocket.on('alert:new', (alertData) => {
       setRecentAlert(alertData);
+      if (alertData.type === 'watering_complete' || alertData.type === 'all_zones_complete') {
+        fetchConsumption();
+      }
     });
 
     newSocket.on('emergency:triggered', () => {
@@ -181,6 +211,8 @@ export function SocketProvider({ children }) {
       recentAlert,
       staleData,
       emergencyStopped,
+      consumption,
+      refreshConsumption: fetchConsumption,
       triggerEmergency,
       resumeSystem,
       sendCommand,

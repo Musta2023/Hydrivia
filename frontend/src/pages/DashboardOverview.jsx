@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Activity,
   Box,
@@ -19,11 +19,17 @@ import CircularGauge from '../components/common/CircularGauge';
 import StatusBadge from '../components/common/StatusBadge';
 
 export default function DashboardOverview({ onNavigate }) {
-  const { telemetry, mqttConnected, recentAlert, emergencyStopped, toggleZone } = useSocket();
+  const { telemetry, mqttConnected, recentAlert, emergencyStopped, toggleZone, consumption } = useSocket();
 
   const { zones = {}, pump = {}, tank = {}, environment = {} } = telemetry;
   const isPumpRunning = pump.pump === 'ON';
   const activeValvesCount = Object.values(zones).filter(z => z.valve === 'ON').length;
+
+  // Water consumption totals from real-time socket data
+  const cTotals = consumption?.totals || {};
+  const todayL = (cTotals.todayLiters || 0);
+  const weekL = (cTotals.weekLiters || 0);
+  const flowRate = isPumpRunning ? 30 : 0;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -130,6 +136,34 @@ export default function DashboardOverview({ onNavigate }) {
           unit="%"
           subtitle="Humidité relative externe"
           icon={Wind}
+        />
+      </div>
+
+      {/* Water Consumption Summary Row */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <StatCard
+          title="Consommation Aujourd'hui"
+          value={todayL.toFixed(1)}
+          unit="L"
+          subtitle={`Demande : ${(cTotals.todayRequestedLiters || todayL).toFixed(1)} L`}
+          icon={Droplets}
+          highlight={todayL > 0}
+        />
+        <StatCard
+          title="Consommation 7 Jours"
+          value={weekL.toFixed(1)}
+          unit="L"
+          subtitle="Cumul hebdomadaire"
+          icon={Droplets}
+        />
+        <StatCard
+          title="Débit Actuel"
+          value={flowRate}
+          unit="L/min"
+          subtitle={isPumpRunning ? 'Pompe en marche' : 'Pompe à l\'arrêt'}
+          icon={Zap}
+          highlight={isPumpRunning}
+          className={isPumpRunning ? 'ring-1 ring-hydra-neon' : ''}
         />
       </div>
 
