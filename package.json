@@ -1,0 +1,28 @@
+{
+  "name": "hydrivia-workspace",
+  "version": "1.0.0",
+  "description": "Système d'irrigation intelligent HYDRIVIA — Dashboard & Gateway IoT",
+  "scripts": {
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start",
+    "start:backend": "npm --prefix backend start",
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install"
+  },
+  "keywords": [
+    "hydrivia",
+    "irrigation",
+    "esp32",
+    "mqtt",
+    "react",
+    "dashboard"
+  ],
+  "author": "HYDRIVIA Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  }
+}
