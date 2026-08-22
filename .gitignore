@@ -14,6 +14,7 @@ yarn-error.log*
 .env.local
 .env.*.local
 secrets.h
+backend/.env
 
 # --- Build output ---
 frontend/dist/
