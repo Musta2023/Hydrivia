@@ -4,20 +4,36 @@
 
 # --- Node.js / npm ---
 node_modules/
+**/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 .pnpm-debug.log*
 
 # --- Environment & Secrets ---
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 secrets.h
 backend/.env
 
 # --- Build output ---
+dist/
+build/
+.next/
+out/
 frontend/dist/
+
+# --- Coverage ---
+coverage/
+
+# --- Runtime files ---
+*.pid
+*.seed
+*.pid.lock
 
 # --- SQLite database files ---
 backend/data/*.sqlite
