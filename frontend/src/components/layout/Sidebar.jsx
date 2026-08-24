@@ -11,7 +11,8 @@ import {
   ScrollText,
   Settings,
   LogOut,
-  Radio
+  Radio,
+  Brain
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
@@ -19,6 +20,7 @@ import { cn } from '../../utils/cn';
 
 const NAV_ITEMS = [
   { id: 'overview', label: 'Vue d\'ensemble', icon: LayoutDashboard },
+  { id: 'ai-analysis', label: 'Analyse IA', icon: Brain },
   { id: '3d', label: 'Visualisation 3D', icon: Box },
   { id: 'zones', label: 'Zones & Cultures', icon: Sprout },
   { id: 'tank', label: 'Réservoir d\'eau', icon: Droplets },

@@ -1,6 +1,6 @@
 # 🌿 HYDRIVIA — Système d'Irrigation Intelligente & Dashboard IoT
 
-Bienvenue sur le projet **HYDRIVIA**, une solution complète d'irrigation intelligente basée sur un microcontrôleur **ESP32**, un broker cloud **HiveMQ Cloud (TLS/MQTTS)**, un backend **Node.js / Express / Socket.IO / SQLite**, et un dashboard web professionnel haute performance **React / Vite / TailwindCSS**.
+Bienvenue sur le projet **HYDRIVIA**, une solution complète d'irrigation intelligente basée sur un microcontrôleur **ESP32**, un broker cloud **HiveMQ Cloud (TLS/MQTTS)**, un backend **Node.js / Express / Socket.IO / Prisma ORM / Supabase PostgreSQL**, et un dashboard web professionnel haute performance **React / Vite / TailwindCSS**.
 
 ---
 
@@ -21,7 +21,7 @@ Bienvenue sur le projet **HYDRIVIA**, une solution complète d'irrigation intell
               │ Pont MQTT ⟷ WebSockets (Socket.IO)
               ▼
  [ Serveur Backend Node.js / Express ]
-   - Base de données SQLite (data/hydrivia.sqlite)
+   - ORM Prisma & Base de Données Supabase PostgreSQL
    - Authentification JWT Administrateur
    - API Open-Meteo & SoilGrids ISRIC
    - Export CSV & Agrégation de Consommation

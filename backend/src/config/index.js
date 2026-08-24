@@ -11,6 +11,8 @@ export const config = {
   port: parseInt(process.env.PORT, 10) || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
   jwtSecret: process.env.JWT_SECRET || 'hydrivia_jwt_default_secret_key_2026',
+  fusionAiSecret: process.env.FUSIONAI_WEBHOOK_SECRET || process.env.AI_WORKFLOW_SECRET || 'hydrivia_fusionai_secret_token_2026',
+  databaseUrl: process.env.DATABASE_URL || 'postgresql://postgres:r4es4xFzB7NCJEv5@db.dofpsqocufwbfosxblil.supabase.co:5432/postgres?sslmode=require',
   
   admin: {
     email: process.env.ADMIN_EMAIL || 'admin@gmail.com',

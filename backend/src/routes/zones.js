@@ -1,7 +1,7 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { liveState, sendZoneCommand } from '../services/mqttService.js';
-import db from '../database/index.js';
+import prisma from '../database/index.js';
 
 const router = express.Router();
 
@@ -16,33 +16,45 @@ router.get('/', authenticateToken, (req, res) => {
 });
 
 // GET /api/zones/:id - Get specific zone details and history
-router.get('/:id', authenticateToken, (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   const zoneId = parseInt(req.params.id, 10);
   if (![1, 2, 3].includes(zoneId)) {
     return res.status(404).json({ error: 'Zone introuvable. Utilisez 1, 2 ou 3.' });
   }
 
-  // Get past 24h soil moisture history for this zone
-  const history = db.prepare(`
-    SELECT timestamp, zone${zoneId}_soil as soil_humidity, pump_running, valve${zoneId} as valve
-    FROM sensor_readings
-    WHERE timestamp >= datetime('now', '-24 hours')
-    ORDER BY timestamp ASC
-  `).all();
+  try {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-  // Get recent irrigation cycles for this zone
-  const cycles = db.prepare(`
-    SELECT * FROM irrigation_cycles
-    WHERE zone_id = ?
-    ORDER BY start_time DESC
-    LIMIT 10
-  `).all(zoneId);
+    // Get past 24h sensor readings
+    const rawReadings = await prisma.sensorReading.findMany({
+      where: {
+        timestamp: { gte: twentyFourHoursAgo }
+      },
+      orderBy: { timestamp: 'asc' }
+    });
 
-  res.json({
-    zone: liveState.zones[zoneId],
-    history,
-    cycles
-  });
+    const history = rawReadings.map((r) => ({
+      timestamp: r.timestamp.toISOString(),
+      soil_humidity: zoneId === 1 ? r.zone1Soil : zoneId === 2 ? r.zone2Soil : r.zone3Soil,
+      pump_running: r.pumpRunning ? 1 : 0,
+      valve: (zoneId === 1 ? r.valve1 : zoneId === 2 ? r.valve2 : r.valve3) ? 1 : 0
+    }));
+
+    // Get recent irrigation cycles for this zone
+    const cycles = await prisma.irrigationCycle.findMany({
+      where: { zoneId },
+      orderBy: { startTime: 'desc' },
+      take: 10
+    });
+
+    res.json({
+      zone: liveState.zones[zoneId],
+      history,
+      cycles
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST /api/zones/:id/command - Send automated or manual watering command

@@ -6,6 +6,7 @@ import Header from './components/layout/Header';
 
 import Login from './pages/Login';
 import DashboardOverview from './pages/DashboardOverview';
+import AIAnalysisPage from './pages/AIAnalysisPage';
 import Visualisation3D from './pages/Visualisation3D';
 import ZonesPage from './pages/ZonesPage';
 import TankPage from './pages/TankPage';
@@ -23,6 +24,8 @@ function AuthenticatedApp() {
     switch (activeTab) {
       case 'overview':
         return <DashboardOverview onNavigate={setActiveTab} />;
+      case 'ai-analysis':
+        return <AIAnalysisPage />;
       case '3d':
         return <Visualisation3D />;
       case 'zones':

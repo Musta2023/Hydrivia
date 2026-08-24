@@ -1,123 +1,131 @@
-import db from '../database/index.js';
+import prisma from '../database/index.js';
 
-export function getConsumptionAnalytics() {
-  // 1. Totals
-  const todayTotal = db.prepare(`
-    SELECT COALESCE(SUM(delivered_liters), 0) as total, COALESCE(SUM(requested_liters), 0) as requested
-    FROM irrigation_cycles
-    WHERE date(start_time) = date('now') OR date(start_time) >= date('now', 'start of day')
-  `).get();
+export async function getConsumptionAnalytics() {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
-  const weekTotal = db.prepare(`
-    SELECT COALESCE(SUM(delivered_liters), 0) as total, COALESCE(SUM(requested_liters), 0) as requested
-    FROM irrigation_cycles
-    WHERE date(start_time) >= date('now', '-7 days')
-  `).get();
-
-  const monthTotal = db.prepare(`
-    SELECT COALESCE(SUM(delivered_liters), 0) as total, COALESCE(SUM(requested_liters), 0) as requested
-    FROM irrigation_cycles
-    WHERE date(start_time) >= date('now', 'start of month')
-  `).get();
-
-  const allTimeTotal = db.prepare(`
-    SELECT COALESCE(SUM(delivered_liters), 0) as total, COUNT(*) as cyclesCount
-    FROM irrigation_cycles
-  `).get();
+  // 1. Totals Aggregations
+  const [todayAgg, weekAgg, monthAgg, allTimeAgg, totalCycles] = await Promise.all([
+    prisma.irrigationCycle.aggregate({
+      where: { startTime: { gte: startOfToday } },
+      _sum: { deliveredLiters: true, requestedLiters: true }
+    }),
+    prisma.irrigationCycle.aggregate({
+      where: { startTime: { gte: sevenDaysAgo } },
+      _sum: { deliveredLiters: true, requestedLiters: true }
+    }),
+    prisma.irrigationCycle.aggregate({
+      where: { startTime: { gte: startOfMonth } },
+      _sum: { deliveredLiters: true, requestedLiters: true }
+    }),
+    prisma.irrigationCycle.aggregate({
+      _sum: { deliveredLiters: true }
+    }),
+    prisma.irrigationCycle.count()
+  ]);
 
   // 2. Consumption by Zone
-  const zoneStats = db.prepare(`
-    SELECT 
-      zone_id, 
-      plant, 
-      COALESCE(SUM(delivered_liters), 0) as total_delivered,
-      COALESCE(SUM(requested_liters), 0) as total_requested,
-      COUNT(*) as cycles_count
-    FROM irrigation_cycles
-    GROUP BY zone_id, plant
-    ORDER BY zone_id ASC
-  `).all();
-
-  // 3. Daily history (past 14 days)
-  const dailyHistory = db.prepare(`
-    SELECT 
-      DATE(start_time) as date,
-      zone_id,
-      plant,
-      COALESCE(SUM(delivered_liters), 0) as delivered,
-      COALESCE(SUM(requested_liters), 0) as requested
-    FROM irrigation_cycles
-    WHERE start_time >= DATE('now', '-14 days')
-    GROUP BY DATE(start_time), zone_id
-    ORDER BY date ASC
-  `).all();
-
-  // Format daily history into chart format: { date, Tomate, Menthe, Oignon, total }
-  const datesMap = {};
-  dailyHistory.forEach(row => {
-    if (!datesMap[row.date]) {
-      datesMap[row.date] = { date: row.date, Tomate: 0, Menthe: 0, Oignon: 0, totalDelivered: 0, totalRequested: 0 };
-    }
-    if (row.zone_id === 1) datesMap[row.date].Tomate = parseFloat(row.delivered.toFixed(1));
-    if (row.zone_id === 2) datesMap[row.date].Menthe = parseFloat(row.delivered.toFixed(1));
-    if (row.zone_id === 3) datesMap[row.date].Oignon = parseFloat(row.delivered.toFixed(1));
-    datesMap[row.date].totalDelivered += row.delivered;
-    datesMap[row.date].totalRequested += row.requested;
+  const zoneCycles = await prisma.irrigationCycle.groupBy({
+    by: ['zoneId', 'plant'],
+    _sum: { deliveredLiters: true, requestedLiters: true },
+    _count: { id: true },
+    orderBy: { zoneId: 'asc' }
   });
 
-  const chartData = Object.values(datesMap).map(d => ({
-    ...d,
+  const byZone = zoneCycles.map((z) => {
+    const delivered = z._sum.deliveredLiters || 0;
+    const requested = z._sum.requestedLiters || 0;
+    return {
+      zoneId: z.zoneId,
+      plant: z.plant,
+      deliveredLiters: parseFloat(delivered.toFixed(1)),
+      requestedLiters: parseFloat(requested.toFixed(1)),
+      cyclesCount: z._count.id,
+      efficiencyPct: requested > 0 ? parseFloat(((delivered / requested) * 100).toFixed(1)) : 100
+    };
+  });
+
+  // 3. Daily history (past 14 days)
+  const fourteenDaysCycles = await prisma.irrigationCycle.findMany({
+    where: { startTime: { gte: fourteenDaysAgo } },
+    orderBy: { startTime: 'asc' }
+  });
+
+  const datesMap = {};
+  fourteenDaysCycles.forEach((cycle) => {
+    const dateStr = cycle.startTime.toISOString().split('T')[0];
+    if (!datesMap[dateStr]) {
+      datesMap[dateStr] = {
+        date: dateStr,
+        Tomate: 0,
+        Menthe: 0,
+        Oignon: 0,
+        totalDelivered: 0,
+        totalRequested: 0
+      };
+    }
+
+    const del = cycle.deliveredLiters || 0;
+    const req = cycle.requestedLiters || 0;
+
+    if (cycle.zoneId === 1) datesMap[dateStr].Tomate += del;
+    if (cycle.zoneId === 2) datesMap[dateStr].Menthe += del;
+    if (cycle.zoneId === 3) datesMap[dateStr].Oignon += del;
+
+    datesMap[dateStr].totalDelivered += del;
+    datesMap[dateStr].totalRequested += req;
+  });
+
+  const dailyChart = Object.values(datesMap).map((d) => ({
+    date: d.date,
+    Tomate: parseFloat(d.Tomate.toFixed(1)),
+    Menthe: parseFloat(d.Menthe.toFixed(1)),
+    Oignon: parseFloat(d.Oignon.toFixed(1)),
     totalDelivered: parseFloat(d.totalDelivered.toFixed(1)),
     totalRequested: parseFloat(d.totalRequested.toFixed(1))
   }));
 
   // 4. Recent completed cycles
-  const recentCycles = db.prepare(`
-    SELECT * FROM irrigation_cycles
-    ORDER BY start_time DESC
-    LIMIT 20
-  `).all();
+  const recentCycles = await prisma.irrigationCycle.findMany({
+    orderBy: { startTime: 'desc' },
+    take: 20
+  });
 
   return {
     totals: {
-      todayLiters: parseFloat(todayTotal.total.toFixed(1)),
-      todayRequestedLiters: parseFloat(todayTotal.requested.toFixed(1)),
-      weekLiters: parseFloat(weekTotal.total.toFixed(1)),
-      weekRequestedLiters: parseFloat(weekTotal.requested.toFixed(1)),
-      monthLiters: parseFloat(monthTotal.total.toFixed(1)),
-      monthRequestedLiters: parseFloat(monthTotal.requested.toFixed(1)),
-      allTimeLiters: parseFloat(allTimeTotal.total.toFixed(1)),
-      totalCycles: allTimeTotal.cyclesCount
+      todayLiters: parseFloat((todayAgg._sum.deliveredLiters || 0).toFixed(1)),
+      todayRequestedLiters: parseFloat((todayAgg._sum.requestedLiters || 0).toFixed(1)),
+      weekLiters: parseFloat((weekAgg._sum.deliveredLiters || 0).toFixed(1)),
+      weekRequestedLiters: parseFloat((weekAgg._sum.requestedLiters || 0).toFixed(1)),
+      monthLiters: parseFloat((monthAgg._sum.deliveredLiters || 0).toFixed(1)),
+      monthRequestedLiters: parseFloat((monthAgg._sum.requestedLiters || 0).toFixed(1)),
+      allTimeLiters: parseFloat((allTimeAgg._sum.deliveredLiters || 0).toFixed(1)),
+      totalCycles
     },
-    byZone: zoneStats.map(z => ({
-      zoneId: z.zone_id,
-      plant: z.plant,
-      deliveredLiters: parseFloat(z.total_delivered.toFixed(1)),
-      requestedLiters: parseFloat(z.total_requested.toFixed(1)),
-      cyclesCount: z.cycles_count,
-      efficiencyPct: z.total_requested > 0 ? parseFloat(((z.total_delivered / z.total_requested) * 100).toFixed(1)) : 100
-    })),
-    dailyChart: chartData,
-    recentCycles
+    byZone,
+    dailyChart,
+    recentCycles: recentCycles.map((c) => ({
+      id: c.id,
+      zone_id: c.zoneId,
+      plant: c.plant,
+      requested_liters: c.requestedLiters,
+      delivered_liters: c.deliveredLiters,
+      target_soil_moisture: c.targetSoilMoisture,
+      start_time: c.startTime.toISOString(),
+      end_time: c.endTime ? c.endTime.toISOString() : null,
+      status: c.status,
+      reason: c.reason
+    }))
   };
 }
 
-export function generateCSVExport() {
-  const rows = db.prepare(`
-    SELECT 
-      id,
-      start_time,
-      end_time,
-      zone_id,
-      plant,
-      requested_liters,
-      delivered_liters,
-      target_soil_moisture,
-      status,
-      reason
-    FROM irrigation_cycles
-    ORDER BY start_time DESC
-  `).all();
+export async function generateCSVExport() {
+  const rows = await prisma.irrigationCycle.findMany({
+    orderBy: { startTime: 'desc' }
+  });
 
   const headers = [
     'ID',
@@ -134,16 +142,16 @@ export function generateCSVExport() {
 
   const csvLines = [headers.join(';')];
 
-  rows.forEach(r => {
+  rows.forEach((r) => {
     const line = [
       r.id,
-      r.start_time || '',
-      r.end_time || '',
-      r.zone_id,
+      r.startTime ? r.startTime.toISOString() : '',
+      r.endTime ? r.endTime.toISOString() : '',
+      r.zoneId,
       `"${r.plant}"`,
-      r.requested_liters,
-      r.delivered_liters,
-      r.target_soil_moisture,
+      r.requestedLiters ?? '',
+      r.deliveredLiters ?? '',
+      r.targetSoilMoisture ?? '',
       `"${r.status}"`,
       `"${(r.reason || '').replace(/"/g, '""')}"`
     ];

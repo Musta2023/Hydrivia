@@ -1,0 +1,97 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model SensorReading {
+  id           BigInt   @id @default(autoincrement())
+  timestamp    DateTime @default(now())
+  zone1Soil    Float?   @map("zone1_soil")
+  zone2Soil    Float?   @map("zone2_soil")
+  zone3Soil    Float?   @map("zone3_soil")
+  waterLevel   Float?   @map("water_level")
+  volumeLiters Float?   @map("volume_liters")
+  temperature  Float?
+  airHumidity  Float?   @map("air_humidity")
+  pumpRunning  Boolean  @default(false) @map("pump_running")
+  valve1       Boolean  @default(false)
+  valve2       Boolean  @default(false)
+  valve3       Boolean  @default(false)
+
+  @@map("sensor_readings")
+}
+
+model IrrigationCycle {
+  id                 Int       @id @default(autoincrement())
+  zoneId             Int       @map("zone_id")
+  plant              String
+  requestedLiters    Float?    @map("requested_liters")
+  targetSoilMoisture Float?    @map("target_soil_moisture")
+  deliveredLiters    Float?    @map("delivered_liters")
+  startTime          DateTime  @default(now()) @map("start_time")
+  endTime            DateTime? @map("end_time")
+  status             String    @default("running")
+  reason             String?
+
+  @@map("irrigation_cycles")
+}
+
+model Alert {
+  id          Int      @id @default(autoincrement())
+  type        String
+  severity    String
+  message     String
+  timestampMs BigInt?  @map("timestamp_ms")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("alerts")
+}
+
+model SystemLog {
+  id          Int      @id @default(autoincrement())
+  eventType   String   @map("event_type")
+  description String
+  userEmail   String?  @map("user_email")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("system_logs")
+}
+
+model Setting {
+  key   String  @id
+  value String?
+
+  @@map("settings")
+}
+
+model AIAnalysis {
+  id                    String   @id
+  timestamp             DateTime
+  decisionStatus        String   @map("decision_status")
+  validForMinutes       Int      @default(60) @map("valid_for_minutes")
+  confidencePct         Float    @default(85) @map("confidence_pct")
+  nextEvaluationMinutes Int      @default(120) @map("next_evaluation_minutes")
+  waterBudget           Json?    @map("water_budget")
+  weatherAssessment     Json?    @map("weather_assessment")
+  zoneDecisions         Json?    @map("zone_decisions")
+  decisionSummary       String   @map("decision_summary")
+  warnings              Json?
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  @@map("ai_analyses")
+}

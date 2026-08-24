@@ -5,9 +5,9 @@ import { getConsumptionAnalytics, generateCSVExport } from '../services/analytic
 const router = express.Router();
 
 // GET /api/analytics/consumption
-router.get('/consumption', authenticateToken, (req, res) => {
+router.get('/consumption', authenticateToken, async (req, res) => {
   try {
-    const data = getConsumptionAnalytics();
+    const data = await getConsumptionAnalytics();
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -15,9 +15,9 @@ router.get('/consumption', authenticateToken, (req, res) => {
 });
 
 // GET /api/analytics/export-csv - Download water consumption history as CSV
-router.get('/export-csv', authenticateToken, (req, res) => {
+router.get('/export-csv', authenticateToken, async (req, res) => {
   try {
-    const csvContent = generateCSVExport();
+    const csvContent = await generateCSVExport();
     const filename = `hydrivia_consommation_eau_${new Date().toISOString().split('T')[0]}.csv`;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

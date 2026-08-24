@@ -2,6 +2,7 @@
   "name": "hydrivia-workspace",
   "version": "1.0.0",
   "description": "Système d'irrigation intelligent HYDRIVIA — Dashboard & Gateway IoT",
+  "type": "module",
   "scripts": {
     "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold\" \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "npm --prefix backend run dev",
@@ -10,6 +11,8 @@
     "build:frontend": "npm --prefix frontend run build",
     "start": "npm --prefix backend start",
     "start:backend": "npm --prefix backend start",
+    "prisma:generate": "prisma generate --schema=backend/prisma/schema.prisma",
+    "prisma:push": "prisma db push --schema=backend/prisma/schema.prisma",
     "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install"
   },
   "keywords": [
@@ -23,6 +26,11 @@
   "author": "HYDRIVIA Team",
   "license": "MIT",
   "devDependencies": {
-    "concurrently": "^10.0.5"
+    "concurrently": "^10.0.5",
+    "prisma": "^5.22.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "pg": "^8.23.0"
   }
 }

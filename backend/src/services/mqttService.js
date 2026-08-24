@@ -1,7 +1,7 @@
 import mqtt from 'mqtt';
 import { config } from '../config/index.js';
 import { broadcast, registerMqttStatusProvider } from './socketService.js';
-import db from '../database/index.js';
+import prisma from '../database/index.js';
 import { getConsumptionAnalytics } from './analyticsService.js';
 
 let mqttClient = null;
@@ -96,11 +96,11 @@ export function initMQTT() {
       });
     });
 
-    mqttClient.on('message', (topic, messageBuffer) => {
+    mqttClient.on('message', async (topic, messageBuffer) => {
       try {
         const payloadStr = messageBuffer.toString();
         const payload = JSON.parse(payloadStr);
-        handleIncomingMessage(topic, payload);
+        await handleIncomingMessage(topic, payload);
       } catch (err) {
         console.error(`[MQTT] Erreur de parsing JSON sur ${topic}:`, err.message);
       }
@@ -129,7 +129,7 @@ export function initMQTT() {
   }
 }
 
-function handleIncomingMessage(topic, payload) {
+async function handleIncomingMessage(topic, payload) {
   liveState.lastSeen = Date.now();
 
   // Zone State (hydrivia/zones/X/state)
@@ -164,17 +164,20 @@ function handleIncomingMessage(topic, payload) {
         if (deliveredLiters <= 0) deliveredLiters = 0.5;
 
         try {
-          db.prepare(`
-            INSERT INTO irrigation_cycles (zone_id, plant, requested_liters, target_soil_moisture, delivered_liters, start_time, end_time, status, reason)
-            VALUES (?, ?, ?, ?, ?, datetime('now', ?), datetime('now'), 'completed', 'Cycle terminé avec succès')
-          `).run(
-            zoneId,
-            cycle.plant,
-            cycle.requestedLiters,
-            cycle.targetSoilMoisture,
-            deliveredLiters,
-            `-${Math.round(elapsedMs / 1000)} seconds`
-          );
+          const startTime = new Date(Date.now() - elapsedMs);
+          await prisma.irrigationCycle.create({
+            data: {
+              zoneId,
+              plant: cycle.plant,
+              requestedLiters: cycle.requestedLiters,
+              targetSoilMoisture: cycle.targetSoilMoisture,
+              deliveredLiters,
+              startTime,
+              endTime: new Date(),
+              status: 'completed',
+              reason: 'Cycle terminé avec succès'
+            }
+          });
           console.log(`[CONSUMPTION] Cycle enregistré: Zone ${zoneId} (${cycle.plant}) = ${deliveredLiters} L livrés.`);
         } catch (err) {
           console.error('[DB] Erreur enregistrement cycle irrigation:', err.message);
@@ -186,7 +189,7 @@ function handleIncomingMessage(topic, payload) {
 
         // Broadcast live updated consumption to all clients
         try {
-          const freshAnalytics = getConsumptionAnalytics();
+          const freshAnalytics = await getConsumptionAnalytics();
           broadcast('consumption:update', freshAnalytics);
         } catch (e) {}
       }
@@ -239,28 +242,27 @@ function handleIncomingMessage(topic, payload) {
 
     // Persist snapshot reading in DB
     try {
-      db.prepare(`
-        INSERT INTO sensor_readings (zone1_soil, zone2_soil, zone3_soil, water_level, volume_liters, temperature, air_humidity, pump_running, valve1, valve2, valve3)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        liveState.zones[1].soil_humidity,
-        liveState.zones[2].soil_humidity,
-        liveState.zones[3].soil_humidity,
-        liveState.tank.water_level,
-        liveState.tank.volume_liters,
-        liveState.environment.temperature,
-        liveState.environment.air_humidity,
-        liveState.pump.pump === 'ON' ? 1 : 0,
-        liveState.zones[1].valve === 'ON' ? 1 : 0,
-        liveState.zones[2].valve === 'ON' ? 1 : 0,
-        liveState.zones[3].valve === 'ON' ? 1 : 0
-      );
+      await prisma.sensorReading.create({
+        data: {
+          zone1Soil: liveState.zones[1].soil_humidity,
+          zone2Soil: liveState.zones[2].soil_humidity,
+          zone3Soil: liveState.zones[3].soil_humidity,
+          waterLevel: liveState.tank.water_level,
+          volumeLiters: liveState.tank.volume_liters,
+          temperature: liveState.environment.temperature,
+          airHumidity: liveState.environment.air_humidity,
+          pumpRunning: liveState.pump.pump === 'ON',
+          valve1: liveState.zones[1].valve === 'ON',
+          valve2: liveState.zones[2].valve === 'ON',
+          valve3: liveState.zones[3].valve === 'ON'
+        }
+      });
     } catch (dbErr) {
       console.error('[DB] Erreur lors de l\'enregistrement du snapshot:', dbErr.message);
     }
 
     try {
-      const consumptionSummary = getConsumptionAnalytics().totals;
+      const consumptionSummary = (await getConsumptionAnalytics()).totals;
       broadcast('telemetry:snapshot', { ...liveState, consumption: consumptionSummary });
     } catch (e) {
       broadcast('telemetry:snapshot', liveState);
@@ -274,7 +276,7 @@ function handleIncomingMessage(topic, payload) {
     
     // Check if watering completed alert was received
     if (payload.type === 'watering_complete' || payload.type === 'all_zones_complete') {
-      Object.keys(activeCycles).forEach(zId => {
+      for (const zId of Object.keys(activeCycles)) {
         const cycle = activeCycles[zId];
         const elapsedMs = Math.max(1000, Date.now() - cycle.startTime);
         let deliveredLiters = parseFloat(((elapsedMs / 60000) * 30.0).toFixed(1));
@@ -284,39 +286,40 @@ function handleIncomingMessage(topic, payload) {
         if (deliveredLiters <= 0) deliveredLiters = 0.5;
 
         try {
-          db.prepare(`
-            INSERT INTO irrigation_cycles (zone_id, plant, requested_liters, target_soil_moisture, delivered_liters, start_time, end_time, status, reason)
-            VALUES (?, ?, ?, ?, ?, datetime('now', ?), datetime('now'), 'completed', ?)
-          `).run(
-            cycle.zoneId,
-            cycle.plant,
-            cycle.requestedLiters,
-            cycle.targetSoilMoisture,
-            deliveredLiters,
-            `-${Math.round(elapsedMs / 1000)} seconds`,
-            payload.message || 'Objectif atteint'
-          );
+          const startTime = new Date(Date.now() - elapsedMs);
+          await prisma.irrigationCycle.create({
+            data: {
+              zoneId: cycle.zoneId,
+              plant: cycle.plant,
+              requestedLiters: cycle.requestedLiters,
+              targetSoilMoisture: cycle.targetSoilMoisture,
+              deliveredLiters,
+              startTime,
+              endTime: new Date(),
+              status: 'completed',
+              reason: payload.message || 'Objectif atteint'
+            }
+          });
         } catch (err) {}
         delete activeCycles[zId];
-      });
+      }
 
       try {
-        const freshAnalytics = getConsumptionAnalytics();
+        const freshAnalytics = await getConsumptionAnalytics();
         broadcast('consumption:update', freshAnalytics);
       } catch (e) {}
     }
 
     try {
-      db.prepare(`
-        INSERT INTO alerts (type, severity, message, timestamp_ms, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(
-        payload.type || 'alert',
-        payload.severity || 'info',
-        payload.message || 'Alerte reçue',
-        payload.timestamp_ms || Date.now(),
-        new Date().toISOString()
-      );
+      await prisma.alert.create({
+        data: {
+          type: payload.type || 'alert',
+          severity: payload.severity || 'info',
+          message: payload.message || 'Alerte reçue',
+          timestampMs: BigInt(payload.timestamp_ms || Date.now()),
+          createdAt: new Date()
+        }
+      });
     } catch (err) {
       console.error('[DB] Erreur insertion alerte:', err.message);
     }
@@ -342,7 +345,7 @@ function checkSystemStatus() {
 }
 
 // Publish Zone Command
-export function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct }) {
+export async function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct }) {
   const topic = `hydrivia/zones/${zoneId}/command`;
   const payload = {
     wateringL: parseFloat(wateringL) || 0,
@@ -367,10 +370,13 @@ export function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct }) {
 
     // Log irrigation start
     try {
-      db.prepare(`
-        INSERT INTO system_logs (event_type, description, user_email)
-        VALUES (?, ?, ?)
-      `).run('IRRIGATION_START', `Commande envoyée Zone ${zoneId} (${liveState.zones[zoneId].plant}): ${payload.wateringL} L, humidité cible: ${payload.targetSoilMoisturePct}%`, 'admin@gmail.com');
+      await prisma.systemLog.create({
+        data: {
+          eventType: 'IRRIGATION_START',
+          description: `Commande envoyée Zone ${zoneId} (${liveState.zones[zoneId].plant}): ${payload.wateringL} L, humidité cible: ${payload.targetSoilMoisturePct}%`,
+          userEmail: 'admin@gmail.com'
+        }
+      });
     } catch (e) {}
   } else {
     liveState.zones[zoneId].watering_active = false;
@@ -383,7 +389,7 @@ export function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct }) {
 }
 
 // Emergency Stop
-export function triggerEmergencyStop(userEmail = 'admin@gmail.com') {
+export async function triggerEmergencyStop(userEmail = 'admin@gmail.com') {
   console.log('[EMERGENCY] DÉCLENCHEMENT DE L\'ARRÊT D\'URGENCE !');
   liveState.emergencyStopped = true;
   liveState.systemStatus = 'EMERGENCY_STOPPED';
@@ -403,15 +409,23 @@ export function triggerEmergencyStop(userEmail = 'admin@gmail.com') {
 
   // Log emergency stop
   try {
-    db.prepare(`
-      INSERT INTO system_logs (event_type, description, user_email)
-      VALUES (?, ?, ?)
-    `).run('ARRET_URGENCE', 'Déclenchement immédiat de l\'arrêt d\'urgence : Pompe et toutes les vannes fermées.', userEmail);
+    await prisma.systemLog.create({
+      data: {
+        eventType: 'ARRET_URGENCE',
+        description: "Déclenchement immédiat de l'arrêt d'urgence : Pompe et toutes les vannes fermées.",
+        userEmail
+      }
+    });
 
-    db.prepare(`
-      INSERT INTO alerts (type, severity, message, timestamp_ms, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run('emergency_stop', 'critical', 'Arrêt d\'urgence déclenché par l\'administrateur. Toutes les vannes et la pompe sont coupées.', Date.now(), new Date().toISOString());
+    await prisma.alert.create({
+      data: {
+        type: 'emergency_stop',
+        severity: 'critical',
+        message: "Arrêt d'urgence déclenché par l'administrateur. Toutes les vannes et la pompe sont coupées.",
+        timestampMs: BigInt(Date.now()),
+        createdAt: new Date()
+      }
+    });
   } catch (err) {
     console.error('[DB] Erreur log arret d\'urgence:', err);
   }
@@ -422,16 +436,19 @@ export function triggerEmergencyStop(userEmail = 'admin@gmail.com') {
 }
 
 // Resume Normal Operation
-export function resumeOperation(userEmail = 'admin@gmail.com') {
+export async function resumeOperation(userEmail = 'admin@gmail.com') {
   console.log('[SYSTEM] Reprise du mode normal.');
   liveState.emergencyStopped = false;
   checkSystemStatus();
 
   try {
-    db.prepare(`
-      INSERT INTO system_logs (event_type, description, user_email)
-      VALUES (?, ?, ?)
-    `).run('SYSTEM_RESUME', 'Reprise normale du système après arrêt.', userEmail);
+    await prisma.systemLog.create({
+      data: {
+        eventType: 'SYSTEM_RESUME',
+        description: 'Reprise normale du système après arrêt.',
+        userEmail
+      }
+    });
   } catch (err) {}
 
   broadcast('emergency:resumed', { timestamp: Date.now() });
@@ -441,7 +458,7 @@ export function resumeOperation(userEmail = 'admin@gmail.com') {
 
 // Built-in Simulator for robust testability
 function startSimulator() {
-  setInterval(() => {
+  setInterval(async () => {
     if (liveState.emergencyStopped) return;
 
     liveState.lastSeen = Date.now();
@@ -451,7 +468,7 @@ function startSimulator() {
     liveState.environment.air_humidity = parseFloat((55 + Math.cos(Date.now() / 60000) * 8 + (Math.random() - 0.5) * 0.5).toFixed(1));
 
     // For active watering zones, increase soil moisture & decrease tank
-    [1, 2, 3].forEach((z) => {
+    for (const z of [1, 2, 3]) {
       const zone = liveState.zones[z];
       if (zone.watering_active && zone.valve === 'ON') {
         zone.soil_humidity = Math.min(100, parseFloat((zone.soil_humidity + 1.2).toFixed(1)));
@@ -464,7 +481,7 @@ function startSimulator() {
           zone.valve = 'OFF';
           
           const alertMsg = `Objectif d'humidité atteint (${zone.soil_humidity}%) pour Zone ${z} (${zone.plant}).`;
-          handleIncomingMessage('hydrivia/alerts', {
+          await handleIncomingMessage('hydrivia/alerts', {
             type: 'watering_complete',
             severity: 'info',
             message: alertMsg,
@@ -472,7 +489,7 @@ function startSimulator() {
           });
         }
       }
-    });
+    }
 
     // Check if pump should be OFF when all valves closed
     const anyValve = Object.values(liveState.zones).some(z => z.valve === 'ON');

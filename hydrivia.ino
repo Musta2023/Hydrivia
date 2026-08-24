@@ -3,12 +3,16 @@
 #include <Adafruit_Sensor.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
+#include <RTClib.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <Wire.h>
 
 Adafruit_BME280 bme;
 bool bmeAvailable = false;
+
+RTC_DS3231 rtc;
+bool rtcAvailable = false;
 
 #define BME280_I2C_ADDR 0x77
 
@@ -182,6 +186,10 @@ const char *TOPIC_SNAPSHOT = "hydrivia/snapshot";
 // Alerts
 const char *TOPIC_ALERTS = "hydrivia/alerts";
 
+// On-Demand Real-time Sensor Request & Response
+const char *TOPIC_SENSOR_REQUEST = "hydrivia/sensors/request";
+const char *TOPIC_SENSOR_RESPONSE = "hydrivia/sensors/realtime";
+
 // ============================================================================
 // MQTT & TLS CLIENTS
 // ============================================================================
@@ -254,6 +262,9 @@ void connectWiFi();
 void connectMQTT();
 void mqttCallback(char *topic, byte *payload, unsigned int length);
 void handleZoneCommand(uint8_t zone, String command);
+void handleSensorRequest(const String &message);
+String getIsoTimestamp();
+void syncRtcFromNtp();
 
 // FIFO Command Queue Operations
 bool enqueueIrrigationCommand(const IrrigationCommand &cmd);
@@ -264,10 +275,11 @@ void clearIrrigationQueue();
 // Automated Irrigation State Machine & Controls
 void updateIrrigationStateMachine();
 void startZoneWatering(const IrrigationCommand &cmd);
-void completeCurrentZone();
+void completeCurrentZone(const char *reason = "Target reached");
 void startNextQueuedZone();
 void stopZoneWatering(uint8_t zone);
 void startZoneWateringManual(uint8_t zone);
+float getCurrentZoneSoilMoisture(uint8_t zone);
 
 // Sensors
 SensorData readSensors();
@@ -503,19 +515,43 @@ void startZoneWatering(const IrrigationCommand &cmd) {
   Serial.println("==============================================");
 }
 
-void completeCurrentZone() {
+float getCurrentZoneSoilMoisture(uint8_t zone) {
+  if (zone == 1) return currentData.zone1.soilHumidity;
+  if (zone == 2) return currentData.zone2.soilHumidity;
+  if (zone == 3) return currentData.zone3.soilHumidity;
+  return 0.0f;
+}
+
+void completeCurrentZone(const char *reason) {
   if (!activeIrrigation.active) {
     return;
   }
 
   uint8_t finishedZone = activeIrrigation.zone;
+  unsigned long elapsed = millis() - activeIrrigation.startMillis;
+  float deliveredLiters = (elapsed / (60.0f * 1000.0f)) * PUMP_FLOW_RATE_LPM;
+  float currentMoisture = getCurrentZoneSoilMoisture(finishedZone);
 
   Serial.println();
-  Serial.print("[IRRIGATION] COMPLETE | Zone: ");
-  Serial.println(finishedZone);
+  Serial.println("==============================================");
+  Serial.print("[IRRIGATION] STOP | Zone: ");
+  Serial.print(finishedZone);
+  Serial.print(" | Reason: ");
+  Serial.println(reason);
+  Serial.print("Delivered Volume: ");
+  Serial.print(deliveredLiters, 1);
+  Serial.print(" / ");
+  Serial.print(activeIrrigation.wateringL, 1);
+  Serial.println(" L");
+  Serial.print("Soil Moisture: ");
+  Serial.print(currentMoisture, 1);
+  Serial.print(" % (Target: ");
+  Serial.print(activeIrrigation.targetSoilMoisturePct, 1);
+  Serial.println(" %)");
   Serial.print("Valve ");
   Serial.print(finishedZone);
   Serial.println(": OFF");
+  Serial.println("==============================================");
 
   // Mark zone as no longer active
   activeIrrigation.active = false;
@@ -551,7 +587,9 @@ void completeCurrentZone() {
   Serial.println("[IRRIGATION] ALL ZONES COMPLETE | Pump: OFF");
   Serial.println("----------------------------------------------");
 
-  publishAlert("all_zones_complete", "info", "All scheduled irrigation zones have completed successfully.");
+  char alertMsg[128];
+  snprintf(alertMsg, sizeof(alertMsg), "Zone %d stopped: %s (%.1fL, Sol: %.1f%%)", finishedZone, reason, deliveredLiters, currentMoisture);
+  publishAlert("zone_complete", "info", alertMsg);
 }
 
 void startNextQueuedZone() {
@@ -571,7 +609,7 @@ void stopZoneWatering(uint8_t zone) {
   if (zone < 1 || zone > 3) return;
 
   if (activeIrrigation.active && activeIrrigation.zone == zone) {
-    completeCurrentZone();
+    completeCurrentZone("Manual stop requested");
   } else {
     // Remove if in queue
     setZoneValveHardware(zone, false);
@@ -604,11 +642,23 @@ void startZoneWateringManual(uint8_t zone) {
 void updateIrrigationStateMachine() {
   unsigned long now = millis();
 
-  // 1. If actively irrigating, check duration completion
+  // 1. If actively irrigating, check STOP conditions:
+  //    Condition A: Watering volume reached (calculated from durationMs)
+  //         OR
+  //    Condition B: Target soil moisture reached (current soil moisture >= targetSoilMoisturePct)
   if (activeIrrigation.active) {
     unsigned long elapsed = now - activeIrrigation.startMillis;
+    float currentMoisture = getCurrentZoneSoilMoisture(activeIrrigation.zone);
+
+    // Condition A: Watering volume reached
     if (elapsed >= activeIrrigation.durationMs) {
-      completeCurrentZone();
+      completeCurrentZone("Watering volume reached");
+      return;
+    }
+
+    // Condition B: Target soil moisture reached
+    if (activeIrrigation.targetSoilMoisturePct > 0.0f && currentMoisture >= activeIrrigation.targetSoilMoisturePct) {
+      completeCurrentZone("Target soil moisture reached");
       return;
     }
   }
@@ -667,14 +717,33 @@ void setup() {
 
   Serial.println("[OK] GPIO initialized.");
 
-  // BME280 Initialization
+  // I2C Bus — shared by BME280 and DS3231
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  bmeAvailable = bme.begin(BME280_I2C_ADDR, &Wire);
 
+  // BME280 Initialization
+  bmeAvailable = bme.begin(BME280_I2C_ADDR, &Wire);
   if (bmeAvailable) {
     Serial.println("[OK] BME280 initialized.");
   } else {
     Serial.println("[WARNING] BME280 not found. Temperature and air humidity = 0.");
+  }
+
+  // DS3231 RTC Initialization
+  rtcAvailable = rtc.begin(&Wire);
+  if (rtcAvailable) {
+    if (rtc.lostPower()) {
+      Serial.println("[WARNING] DS3231 lost power — time not set yet. Will sync from NTP.");
+    } else {
+      DateTime rtcNow = rtc.now();
+      Serial.print("[OK] DS3231 RTC initialized. Current RTC time: ");
+      char rtcBuf[25];
+      snprintf(rtcBuf, sizeof(rtcBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+               rtcNow.year(), rtcNow.month(), rtcNow.day(),
+               rtcNow.hour(), rtcNow.minute(), rtcNow.second());
+      Serial.println(rtcBuf);
+    }
+  } else {
+    Serial.println("[WARNING] DS3231 not found. Falling back to NTP / millis().");
   }
 
   // Wi-Fi Connection
@@ -696,6 +765,8 @@ void setup() {
 
   if (now >= 8 * 3600 * 2) {
     Serial.println("[OK] NTP time synced.");
+    // Push NTP time into DS3231 so it stays accurate across reboots
+    syncRtcFromNtp();
   } else {
     Serial.println("[WARNING] NTP sync failed — TLS may not work.");
   }
@@ -848,7 +919,13 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   }
   message.trim();
 
-  // Identify Zone ID
+  // 1. On-Demand Real-time Sensor Request
+  if (receivedTopic.equals(TOPIC_SENSOR_REQUEST) || receivedTopic.indexOf("sensors/request") >= 0) {
+    handleSensorRequest(message);
+    return;
+  }
+
+  // 2. Identify Zone ID for irrigation commands
   uint8_t zoneId = 0;
   if (receivedTopic.indexOf("zones/1") >= 0 || receivedTopic.indexOf("/1/") >= 0) {
     zoneId = 1;
@@ -1192,6 +1269,7 @@ void connectMQTT() {
     mqttClient.subscribe(TOPIC_ZONE1_COMMAND, 1);
     mqttClient.subscribe(TOPIC_ZONE2_COMMAND, 1);
     mqttClient.subscribe(TOPIC_ZONE3_COMMAND, 1);
+    mqttClient.subscribe(TOPIC_SENSOR_REQUEST, 1);
 
     publishAllZoneStates();
     publishPumpState();
@@ -1302,7 +1380,7 @@ void publishZoneState(uint8_t zone) {
   doc["pump"] = pumpRunning ? "ON" : "OFF";
   doc["water_level"] = currentData.waterLevel;
   doc["volume_liters"] = currentData.volumeLiters;
-  doc["timestamp_ms"] = millis();
+  doc["timestamp"] = getIsoTimestamp();
 
   char buffer[384];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
@@ -1325,7 +1403,7 @@ void publishPumpState() {
   doc["pump"] = pumpRunning ? "ON" : "OFF";
   doc["water_level"] = currentData.waterLevel;
   doc["volume_liters"] = currentData.volumeLiters;
-  doc["timestamp_ms"] = millis();
+  doc["timestamp"] = getIsoTimestamp();
 
   char buffer[256];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
@@ -1344,7 +1422,7 @@ void publishTankState() {
   doc["capacity_liters"] = TANK_CAPACITY_LITERS;
   doc["critical"] = currentData.waterLevel < WATER_LEVEL_CRITICAL_PCT;
   doc["low"] = currentData.waterLevel < WATER_LEVEL_LOW_PCT;
-  doc["timestamp_ms"] = millis();
+  doc["timestamp"] = getIsoTimestamp();
 
   char buffer[320];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
@@ -1360,7 +1438,7 @@ void publishEnvironmentState() {
   doc["device_id"] = DEVICE_ID;
   doc["temperature"] = currentData.temperature;
   doc["air_humidity"] = currentData.airHumidity;
-  doc["timestamp_ms"] = millis();
+  doc["timestamp"] = getIsoTimestamp();
 
   char buffer[256];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
@@ -1375,7 +1453,7 @@ void publishSnapshot() {
   StaticJsonDocument<2048> doc;
   doc["device_id"] = DEVICE_ID;
   doc["system"] = "HYDRIVIA";
-  doc["timestamp_ms"] = millis();
+  doc["timestamp"] = getIsoTimestamp();
 
   JsonArray zones = doc.createNestedArray("zones");
 
@@ -1435,7 +1513,7 @@ void publishAlert(const char *type, const char *severity, const char *message) {
 
   StaticJsonDocument<384> doc;
   doc["device_id"] = DEVICE_ID;
-  doc["timestamp_ms"] = millis();
+  doc["timestamp"] = getIsoTimestamp();
   doc["type"] = type;
   doc["severity"] = severity;
   doc["message"] = message;
@@ -1444,5 +1522,171 @@ void publishAlert(const char *type, const char *severity, const char *message) {
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
     mqttClient.publish(TOPIC_ALERTS, buffer);
+  }
+}
+
+// ============================================================================
+// ON-DEMAND SENSOR REQUEST / REALTIME RESPONSE
+// ============================================================================
+
+// Sync DS3231 hardware clock from the ESP32 NTP-synced system clock
+void syncRtcFromNtp() {
+  if (!rtcAvailable) return;
+  time_t ntpNow = time(nullptr);
+  if (ntpNow < 8 * 3600 * 2) {
+    Serial.println("[RTC] NTP not ready — skipping DS3231 sync.");
+    return;
+  }
+  rtc.adjust(DateTime(ntpNow));
+  Serial.println("[RTC] DS3231 synchronized from NTP.");
+}
+
+// 3-tier timestamp: DS3231 RTC → NTP system clock → millis() fallback
+String getIsoTimestamp() {
+  // Priority 1: DS3231 hardware RTC (accurate even offline)
+  if (rtcAvailable) {
+    DateTime dt = rtc.now();
+    if (dt.isValid() && dt.year() >= 2024) {
+      char buf[25];
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+               dt.year(), dt.month(), dt.day(),
+               dt.hour(), dt.minute(), dt.second());
+      return String(buf);
+    }
+  }
+
+  // Priority 2: NTP-synced system clock (online only)
+  time_t now = time(nullptr);
+  if (now > 100000) {
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    char buf[30];
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+    return String(buf);
+  }
+
+  // Priority 3: millis() uptime fallback (no real time available)
+  return "uptime+" + String(millis()) + "ms";
+}
+
+void handleSensorRequest(const String &message) {
+  // 1. Extract requestId from incoming JSON
+  String requestId = "";
+  if (message.length() > 0 && message.startsWith("{")) {
+    StaticJsonDocument<256> reqDoc;
+    DeserializationError err = deserializeJson(reqDoc, message);
+    if (!err && reqDoc.containsKey("requestId")) {
+      requestId = reqDoc["requestId"].as<String>();
+    }
+  }
+
+  // Fallback if requestId is absent
+  if (requestId.length() == 0) {
+    requestId = "req-" + String(millis());
+  }
+
+  Serial.print("[SENSOR REQUEST] Received requestId=");
+  Serial.println(requestId);
+  Serial.println("[SENSOR REQUEST] Reading current sensors...");
+
+  // 2. Read FRESH sensor data immediately (no cached values)
+  float freshSoil1 = 0.0f, freshSoil2 = 0.0f, freshSoil3 = 0.0f;
+  readSoilHumidityPercent(freshSoil1, freshSoil2, freshSoil3);
+
+  float freshWaterLevel = readWaterLevelPercent();
+  float freshVolume = calculateVolumeLiters(freshWaterLevel);
+
+  float freshTemp = 0.0f;
+  float freshHum = 0.0f;
+  bool bmeSuccess = false;
+
+  if (bmeAvailable) {
+    freshTemp = bme.readTemperature();
+    freshHum = bme.readHumidity();
+    if (!isnan(freshTemp) && !isnan(freshHum)) {
+      bmeSuccess = true;
+    } else {
+      freshTemp = 0.0f;
+      freshHum = 0.0f;
+    }
+  }
+
+  // Update currentData state with the fresh readings
+  currentData.zone1.soilHumidity = freshSoil1;
+  currentData.zone2.soilHumidity = freshSoil2;
+  currentData.zone3.soilHumidity = freshSoil3;
+  currentData.waterLevel = freshWaterLevel;
+  currentData.volumeLiters = freshVolume;
+  currentData.temperature = freshTemp;
+  currentData.airHumidity = freshHum;
+  currentData.valid = validateData(currentData);
+
+  // 3. Build consolidated JSON response
+  bool hasErrors = false;
+  StaticJsonDocument<1536> doc;
+  doc["requestId"] = requestId;
+  doc["timestamp"] = getIsoTimestamp();
+  doc["deviceId"] = DEVICE_ID;
+
+  // Zones object
+  JsonObject zonesObj = doc.createNestedObject("zones");
+  
+  JsonObject z1 = zonesObj.createNestedObject("1");
+  z1["soilMoisturePct"] = freshSoil1;
+  z1["valveOpen"] = isZoneOpen(1);
+
+  JsonObject z2 = zonesObj.createNestedObject("2");
+  z2["soilMoisturePct"] = freshSoil2;
+  z2["valveOpen"] = isZoneOpen(2);
+
+  JsonObject z3 = zonesObj.createNestedObject("3");
+  z3["soilMoisturePct"] = freshSoil3;
+  z3["valveOpen"] = isZoneOpen(3);
+
+  // Tank object
+  JsonObject tankObj = doc.createNestedObject("tank");
+  tankObj["waterLevelPct"] = freshWaterLevel;
+  tankObj["volumeLiters"] = freshVolume;
+
+  // Environment object
+  JsonObject envObj = doc.createNestedObject("environment");
+  envObj["temperature"] = freshTemp;
+  envObj["airHumidity"] = freshHum;
+
+  // Pump object
+  JsonObject pumpObj = doc.createNestedObject("pump");
+  pumpObj["active"] = pumpRunning;
+
+  // Sensor diagnostic validation
+  JsonArray errors = doc.createNestedArray("errors");
+  if (!bmeAvailable || !bmeSuccess) {
+    hasErrors = true;
+    errors.add("BME280 environment sensor unavailable or read failed");
+  }
+  if (freshWaterLevel < 0.0f || freshWaterLevel > 100.0f) {
+    hasErrors = true;
+    errors.add("Ultrasonic water level sensor reading out of valid range");
+  }
+
+  if (hasErrors) {
+    doc["status"] = "PARTIAL";
+  } else {
+    doc["status"] = "OK";
+    doc.remove("errors");
+  }
+
+  // 4. Serialize and publish without retention (retained = false)
+  char buffer[1536];
+  size_t len = serializeJson(doc, buffer, sizeof(buffer));
+
+  if (len > 0 && len < sizeof(buffer) && mqttClient.connected()) {
+    bool published = mqttClient.publish(TOPIC_SENSOR_RESPONSE, buffer, false);
+    if (published) {
+      Serial.println("[SENSOR RESPONSE] Published realtime sensor data");
+    } else {
+      Serial.println("[SENSOR RESPONSE] MQTT publish failed");
+    }
+  } else {
+    Serial.println("[SENSOR RESPONSE] MQTT publish failed (Client disconnected or buffer overflow)");
   }
 }

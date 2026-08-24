@@ -17,6 +17,7 @@ import soilRoutes from './routes/soil.js';
 import alertsRoutes from './routes/alerts.js';
 import logsRoutes from './routes/logs.js';
 import emergencyRoutes from './routes/emergency.js';
+import aiAnalysisRoutes from './routes/aiAnalysis.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -24,11 +25,6 @@ const server = http.createServer(app);
 // Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json());
-
-// Initialize Core Subsystems
-initDatabase();
-initSocket(server);
-initMQTT();
 
 // API Routes Mounting
 app.use('/api/auth', authRoutes);
@@ -41,6 +37,7 @@ app.use('/api/soil', soilRoutes);
 app.use('/api/alerts', alertsRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/emergency', emergencyRoutes);
+app.use('/api/ai-analysis', aiAnalysisRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -48,18 +45,37 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     system: 'HYDRIVIA Smart Irrigation Gateway',
     timestamp: new Date().toISOString(),
-    env: config.nodeEnv
+    env: config.nodeEnv,
+    database: 'Supabase PostgreSQL (Prisma ORM)'
   });
 });
 
-// Start Server
-const PORT = config.port;
-server.listen(PORT, () => {
-  console.log();
-  console.log('====================================================');
-  console.log(`  🌿 HYDRIVIA Backend Gateway lancé sur le port ${PORT}`);
-  console.log(`  🔗 API: http://localhost:${PORT}/api/health`);
-  console.log(`  🔐 Mode: ${config.nodeEnv}`);
-  console.log('====================================================');
-  console.log();
-});
+// Startup Function
+async function startServer() {
+  try {
+    // 1. Initialize Database (Supabase PostgreSQL via Prisma)
+    await initDatabase();
+
+    // 2. Initialize Sockets & MQTT
+    initSocket(server);
+    initMQTT();
+
+    // 3. Start Listening
+    const PORT = config.port;
+    server.listen(PORT, () => {
+      console.log();
+      console.log('====================================================');
+      console.log(`  🌿 HYDRIVIA Backend Gateway lancé sur le port ${PORT}`);
+      console.log(`  🔗 API: http://localhost:${PORT}/api/health`);
+      console.log(`  🐘 DB: Supabase PostgreSQL (Prisma ORM)`);
+      console.log(`  🔐 Mode: ${config.nodeEnv}`);
+      console.log('====================================================');
+      console.log();
+    });
+  } catch (error) {
+    console.error('Fatal startup error:', error);
+    process.exit(1);
+  }
+}
+
+startServer();

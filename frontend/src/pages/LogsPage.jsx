@@ -69,7 +69,7 @@ export default function LogsPage() {
         <div className="flex items-center justify-between pb-4 border-b border-hydra-border mb-4 text-xs font-mono text-hydra-textMuted">
           <div className="flex items-center gap-2">
             <Terminal className="w-4 h-4 text-hydra-neon" />
-            <span>CONSOLE D'AUDIT (SQLite)</span>
+            <span>CONSOLE D'AUDIT (PostgreSQL / Supabase)</span>
           </div>
           <span>{logs.length} entrées enregistrées</span>
         </div>

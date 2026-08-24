@@ -35,11 +35,13 @@ coverage/
 *.seed
 *.pid.lock
 
-# --- SQLite database files ---
+# --- SQLite database files & backups ---
 backend/data/*.sqlite
 backend/data/*.sqlite-journal
 backend/data/*.sqlite-wal
 backend/data/*.sqlite-shm
+backend/data/*.db
+backend/data/backup_sqlite/
 
 # --- OS generated files ---
 .DS_Store
