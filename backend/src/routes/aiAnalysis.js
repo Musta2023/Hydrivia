@@ -6,9 +6,9 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Helper: Machine-to-machine authentication middleware for FusionAI / n8n webhook
+// Helper: Machine-to-machine authentication middleware for FusionAI webhook
 function authenticateWorkflowSecret(req, res, next) {
-  const secretHeader = req.headers['x-fusionai-secret'] || req.headers['x-n8n-secret'];
+  const secretHeader = req.headers['x-fusionai-secret'];
   const authHeader = req.headers['authorization'];
   let bearerToken = null;
   if (authHeader && authHeader.startsWith('Bearer ')) {
