@@ -160,18 +160,19 @@ Le firmware est écrit en C++ sous Arduino Core pour ESP32, selon une architectu
   - `SOIL_DRY_VALUE = 3500` (Capteur à l'air libre $\rightarrow 0\%$)
   - `SOIL_WET_VALUE = 1500` (Capteur immergé dans l'eau $\rightarrow 100\%$)
 - **Équation de Conversion** :
-  $$\text{Humidité (\%)} = \text{constrain}\left(\frac{\text{SOIL\_DRY\_VALUE} - \text{ADC\_BRUT}}{\text{SOIL\_DRY\_VALUE} - \text{SOIL\_WET\_VALUE}} \times 100.0,\, 0.0,\, 100.0\right)$$
+  $$\text{Humidite (\%)} = \mathrm{constrain}\left(\frac{\mathrm{ADC_{sec}} - \mathrm{ADC_{brut}}}{\mathrm{ADC_{sec}} - \mathrm{ADC_{humide}}} \times 100.0,\, 0.0,\, 100.0\right)$$
+  *(avec $\mathrm{ADC_{sec}} = 3500$ et $\mathrm{ADC_{humide}} = 1500$)*
 
 ### 2. Capteur de Niveau Ultrasonique (HC-SR04)
-- **Vitesse du son** : $v \approx 343\text{ m/s} = 0.0343\text{ cm/\mu s}$.
+- **Vitesse du son** : $v \approx 343\text{ m/s} = 0.0343\text{ cm/}\mu\text{s}$.
 - **Calcul de la Distance** :
-  $$\text{Distance (cm)} = \frac{\text{Durée\_Impulsion (\mu s)} \times 0.0343}{2}$$
+  $$\text{Distance (cm)} = \frac{t_{\text{impulsion}} (\mu\text{s}) \times 0.0343}{2}$$
 - **Étalonnage du Réservoir** :
   - `EMPTY_DISTANCE = 180.69 cm` (Réservoir vide $\rightarrow 0\%$)
   - `FULL_DISTANCE = 1.21 cm` (Réservoir plein $\rightarrow 100\%$)
   - `TANK_CAPACITY_LITERS = 7000.0 L`
 - **Formules de Pourcentage et Volume** :
-  $$\text{Niveau (\%)} = \text{constrain}\left(\frac{180.69 - \text{Distance}}{180.69 - 1.21} \times 100.0,\, 0.0,\, 100.0\right)$$
+  $$\text{Niveau (\%)} = \mathrm{constrain}\left(\frac{180.69 - \text{Distance}}{180.69 - 1.21} \times 100.0,\, 0.0,\, 100.0\right)$$
   $$\text{Volume (Litres)} = \frac{\text{Niveau (\%)}}{100.0} \times 7000.0$$
 
 ### 3. Capteur Environnemental (BME280)
@@ -190,7 +191,7 @@ Le firmware est écrit en C++ sous Arduino Core pour ESP32, selon une architectu
 
 ### Intégration du Volume d'Eau Livré
 Pendant l'arrosage, le volume d'eau injecté est calculé en continu :
-$$V_{\text{livré}} (\text{L}) = \left(\frac{t_{\text{actuel}} - t_{\text{début}}}{60000.0}\right) \times 30.0$$
+$$V_{\text{livre}} (\text{L}) = \left(\frac{t_{\text{actuel}} - t_{\text{debut}}}{60000.0}\right) \times 30.0$$
 
 ---
 
@@ -360,7 +361,7 @@ stateDiagram-v2
 
 ### Règle de l'Arrêt à Double Condition
 L'arrosage s'interrompt dès que la **première condition** est vérifiée :
-$$\text{ARRÊT} \iff (V_{\text{délivré}} \ge V_{\text{cible}}) \quad\lor\quad (\text{Humidité}_{\text{actuelle}} \ge \text{Humidité}_{\text{cible}})$$
+$$\text{ARRET} \iff (V_{\text{livre}} \ge V_{\text{cible}}) \quad\lor\quad (\text{Humidite}_{\text{actuelle}} \ge \text{Humidite}_{\text{cible}})$$
 
 ---
 
