@@ -12,6 +12,7 @@ pnpm-debug.log*
 .pnpm-debug.log*
 
 # --- Environment & Secrets ---
+scratch/
 .env
 .env.*
 !.env.example
