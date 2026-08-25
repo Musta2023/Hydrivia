@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState } from 'react';
 import {
   Activity,
   Box,
@@ -11,25 +11,104 @@ import {
   Square,
   Zap,
   ArrowUpRight,
-  ShieldAlert
+  ShieldAlert,
+  Brain,
+  Radio,
+  Cpu,
+  Check
 } from 'lucide-react';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext';
 import StatCard from '../components/common/StatCard';
 import CircularGauge from '../components/common/CircularGauge';
 import StatusBadge from '../components/common/StatusBadge';
 
+// Helper: Format relative time in French
+function formatRelativeTime(isoString) {
+  if (!isoString) return '';
+  const now = new Date();
+  const date = new Date(isoString);
+  const diffMinutes = Math.floor((now - date) / (1000 * 60));
+
+  if (diffMinutes < 1) return "À l'instant";
+  if (diffMinutes < 60) return `Il y a ${diffMinutes} min`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `Il y a ${diffHours} h`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `Il y a ${diffDays} j`;
+}
+
 export default function DashboardOverview({ onNavigate }) {
-  const { telemetry, mqttConnected, recentAlert, emergencyStopped, toggleZone, consumption } = useSocket();
+  const {
+    telemetry,
+    recentAlert,
+    resolveAlert,
+    emergencyStopped,
+    toggleZone,
+    consumption
+  } = useSocket();
+  const { isAdmin, isOperator } = useAuth();
+
+  const [resolvingId, setResolvingId] = useState(null);
 
   const { zones = {}, pump = {}, tank = {}, environment = {} } = telemetry;
   const isPumpRunning = pump.pump === 'ON';
-  const activeValvesCount = Object.values(zones).filter(z => z.valve === 'ON').length;
+  const activeValvesCount = Object.values(zones).filter((z) => z.valve === 'ON').length;
 
   // Water consumption totals from real-time socket data
   const cTotals = consumption?.totals || {};
-  const todayL = (cTotals.todayLiters || 0);
-  const weekL = (cTotals.weekLiters || 0);
+  const todayL = cTotals.todayLiters || 0;
+  const weekL = cTotals.weekLiters || 0;
   const flowRate = isPumpRunning ? 30 : 0;
+
+  // Handle alert quick-resolve for critical banner
+  const handleResolve = async (id) => {
+    setResolvingId(id);
+    try {
+      await resolveAlert(id);
+    } catch (err) {
+      console.error('Failed to resolve alert:', err);
+    } finally {
+      setResolvingId(null);
+    }
+  };
+
+  // Helper for source badge styling
+  const renderSourceBadge = (source, category) => {
+    const s = (source || '').toUpperCase();
+    const c = (category || '').toUpperCase();
+
+    if (s === 'AI' || c === 'AI') {
+      return (
+        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 flex items-center gap-1">
+          <Brain className="w-3.5 h-3.5 text-cyan-400" />
+          IA FUSIONAI
+        </span>
+      );
+    }
+    if (s === 'MQTT' || c === 'CONNECTION') {
+      return (
+        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-purple-500/20 text-purple-400 border border-purple-500/40 flex items-center gap-1">
+          <Radio className="w-3.5 h-3.5 text-purple-400" />
+          MQTT
+        </span>
+      );
+    }
+    if (s === 'HYDRIVIA' || c === 'WATER' || c === 'PUMP' || c === 'VALVE') {
+      return (
+        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-hydra-neon/20 text-hydra-neon border border-hydra-neon/40 flex items-center gap-1">
+          <Droplets className="w-3.5 h-3.5 text-hydra-neon" />
+          HYDRIVIA
+        </span>
+      );
+    }
+    return (
+      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center gap-1">
+        <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+        SYSTÈME
+      </span>
+    );
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -59,6 +138,7 @@ export default function DashboardOverview({ onNavigate }) {
           <ArrowUpRight className="w-4 h-4" />
         </button>
       </div>
+
       {/* Emergency Stopped Banner */}
       {emergencyStopped && (
         <div className="p-4 bg-hydra-alert/20 border-2 border-hydra-alert rounded-2xl flex items-center justify-between gap-4 shadow-[0_0_30px_rgba(255,59,59,0.3)] animate-pulse">
@@ -84,15 +164,45 @@ export default function DashboardOverview({ onNavigate }) {
         </div>
       )}
 
-      {/* Critical / High Alert Banner */}
+      {/* Critical / High Alert Banner (with AI and System badge) */}
       {recentAlert && (recentAlert.severity === 'high' || recentAlert.severity === 'critical') && (
-        <div className="p-4 bg-hydra-alert/15 border border-hydra-alert/40 rounded-2xl flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-hydra-alert flex-shrink-0 animate-bounce" />
-          <div className="flex-1 text-xs">
-            <span className="font-bold text-hydra-alert uppercase tracking-wider mr-2">
-              [{recentAlert.type}]
-            </span>
-            <span className="text-hydra-textMain">{recentAlert.message}</span>
+        <div className="p-4 bg-hydra-alert/15 border border-hydra-alert/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_0_20px_rgba(255,59,59,0.15)]">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-hydra-alert flex-shrink-0 animate-bounce" />
+            <div className="text-xs">
+              <div className="flex items-center gap-2 mb-0.5">
+                {renderSourceBadge(recentAlert.source, recentAlert.category)}
+                <span className="font-mono font-bold text-hydra-alert uppercase">
+                  [{recentAlert.type}]
+                </span>
+                <span className="text-[11px] font-mono text-hydra-textMuted">
+                  {formatRelativeTime(recentAlert.createdAt || recentAlert.created_at)}
+                </span>
+              </div>
+              <span className="text-hydra-textMain font-medium">{recentAlert.message}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center">
+            {recentAlert.source?.toUpperCase() === 'AI' && (
+              <button
+                onClick={() => onNavigate('ai-analysis')}
+                className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-500/40 text-xs font-bold flex items-center gap-1.5 transition"
+              >
+                <Brain className="w-3.5 h-3.5" />
+                <span>Voir Rapport IA</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => handleResolve(recentAlert.id)}
+                disabled={resolvingId === recentAlert.id}
+                className="px-3 py-1.5 rounded-lg bg-hydra-border hover:bg-hydra-neon hover:text-hydra-darkest text-hydra-textMain text-xs font-bold flex items-center gap-1.5 transition"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Acquitter</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -160,7 +270,7 @@ export default function DashboardOverview({ onNavigate }) {
           title="Débit Actuel"
           value={flowRate}
           unit="L/min"
-          subtitle={isPumpRunning ? 'Pompe en marche' : 'Pompe à l\'arrêt'}
+          subtitle={isPumpRunning ? 'Pompe en marche' : "Pompe à l'arrêt"}
           icon={Zap}
           highlight={isPumpRunning}
           className={isPumpRunning ? 'ring-1 ring-hydra-neon' : ''}
@@ -229,7 +339,13 @@ export default function DashboardOverview({ onNavigate }) {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-auto py-2">
             {[1, 2, 3].map((zoneId) => {
-              const zone = zones[zoneId] || { id: zoneId, plant: ['Tomate', 'Menthe', 'Oignon'][zoneId - 1], soil_humidity: 45, valve: 'OFF' };
+              const zone =
+                zones[zoneId] || {
+                  id: zoneId,
+                  plant: ['Tomate', 'Menthe', 'Oignon'][zoneId - 1],
+                  soil_humidity: 45,
+                  valve: 'OFF'
+                };
               const isOpen = zone.valve === 'ON';
 
               return (
@@ -268,27 +384,33 @@ export default function DashboardOverview({ onNavigate }) {
                   </div>
 
                   {/* Quick Action button */}
-                  <button
-                    onClick={() => toggleZone(zoneId, isOpen ? 'OFF' : 'ON')}
-                    disabled={emergencyStopped}
-                    className={`w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
-                      isOpen
-                        ? 'bg-hydra-alert/20 text-hydra-alert hover:bg-hydra-alert/30 border border-hydra-alert/40'
-                        : 'bg-hydra-border text-hydra-textMain hover:bg-hydra-neon hover:text-hydra-darkest border border-hydra-borderHighlight'
-                    }`}
-                  >
-                    {isOpen ? (
-                      <>
-                        <Square className="w-3.5 h-3.5" />
-                        <span>Fermer vanne</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-3.5 h-3.5" />
-                        <span>Ouvrir vanne</span>
-                      </>
-                    )}
-                  </button>
+                  {isAdmin ? (
+                    <button
+                      onClick={() => toggleZone(zoneId, isOpen ? 'OFF' : 'ON')}
+                      disabled={emergencyStopped}
+                      className={`w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                        isOpen
+                          ? 'bg-hydra-alert/20 text-hydra-alert hover:bg-hydra-alert/30 border border-hydra-alert/40'
+                          : 'bg-hydra-border text-hydra-textMain hover:bg-hydra-neon hover:text-hydra-darkest border border-hydra-borderHighlight'
+                      }`}
+                    >
+                      {isOpen ? (
+                        <>
+                          <Square className="w-3.5 h-3.5" />
+                          <span>Fermer vanne</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5" />
+                          <span>Ouvrir vanne</span>
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <div className="w-full py-2 rounded-lg text-[11px] font-mono text-center bg-hydra-dark/60 border border-hydra-border text-hydra-textMuted">
+                      <span>🔒 Contrôle restreint</span>
+                    </div>
+                  )}
                 </div>
               );
             })}

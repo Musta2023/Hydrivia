@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import api from '../services/api';
 
@@ -24,6 +24,9 @@ export function SocketProvider({ children }) {
   });
 
   const [recentAlert, setRecentAlert] = useState(null);
+  const [alerts, setAlerts] = useState([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [latestAiAnalysis, setLatestAiAnalysis] = useState(null);
   const [staleData, setStaleData] = useState(false);
   const [consumption, setConsumption] = useState({
     totals: { todayLiters: 0, todayRequestedLiters: 0, weekLiters: 0, monthLiters: 0, allTimeLiters: 0, totalCycles: 0 },
@@ -32,12 +35,52 @@ export function SocketProvider({ children }) {
     recentCycles: []
   });
 
-  const fetchConsumption = async () => {
+  const fetchConsumption = useCallback(async () => {
     try {
       const res = await api.get('/analytics/consumption');
       setConsumption(res.data);
     } catch (err) {
       console.warn('Consumption fetch warning:', err.message);
+    }
+  }, []);
+
+  const fetchAlerts = useCallback(async () => {
+    setAlertsLoading(true);
+    try {
+      const res = await api.get('/alerts?limit=50');
+      if (res.data && res.data.alerts) {
+        setAlerts(res.data.alerts);
+        if (res.data.alerts.length > 0 && !recentAlert) {
+          const activeHigh = res.data.alerts.find(a => a.status === 'active' && (a.severity === 'critical' || a.severity === 'high'));
+          if (activeHigh) setRecentAlert(activeHigh);
+        }
+      }
+    } catch (err) {
+      console.warn('Alerts fetch warning:', err.message);
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, [recentAlert]);
+
+  const fetchLatestAi = useCallback(async () => {
+    try {
+      const res = await api.get('/ai-analysis/latest');
+      if (res.data && res.data.analysis) {
+        setLatestAiAnalysis(res.data.analysis);
+      }
+    } catch (err) {
+      console.warn('Latest AI analysis fetch warning:', err.message);
+    }
+  }, []);
+
+  const resolveAlert = async (alertId) => {
+    try {
+      const res = await api.patch(`/alerts/${alertId}/resolve`);
+      setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, status: 'resolved', resolved_at: new Date().toISOString() } : a));
+      return res.data;
+    } catch (err) {
+      console.error('Error resolving alert:', err);
+      throw err;
     }
   };
 
@@ -45,27 +88,41 @@ export function SocketProvider({ children }) {
     // Initial fetch of live status from REST API
     async function fetchInitialStatus() {
       try {
-        const [zonesRes, tankRes, emergRes, analyticsRes] = await Promise.all([
-          api.get('/zones'),
-          api.get('/tank'),
-          api.get('/emergency/status'),
-          api.get('/analytics/consumption').catch(() => ({ data: null }))
+        const [zonesRes, tankRes, emergRes, analyticsRes, alertsRes, aiRes] = await Promise.all([
+          api.get('/zones').catch(() => ({ data: { zones: [] } })),
+          api.get('/tank').catch(() => ({ data: {} })),
+          api.get('/emergency/status').catch(() => ({ data: { emergencyStopped: false } })),
+          api.get('/analytics/consumption').catch(() => ({ data: null })),
+          api.get('/alerts?limit=50').catch(() => ({ data: { alerts: [] } })),
+          api.get('/ai-analysis/latest').catch(() => ({ data: { analysis: null } }))
         ]);
         
-        const zMap = {};
-        zonesRes.data.zones.forEach(z => { zMap[z.id] = z; });
-        
-        setTelemetry(prev => ({
-          ...prev,
-          zones: zMap,
-          pump: zonesRes.data.pump || prev.pump,
-          tank: tankRes.data.tank || prev.tank,
-          lastSeen: zonesRes.data.lastSeen || Date.now()
-        }));
+        if (zonesRes.data && zonesRes.data.zones) {
+          const zMap = {};
+          zonesRes.data.zones.forEach(z => { zMap[z.id] = z; });
+          
+          setTelemetry(prev => ({
+            ...prev,
+            zones: zMap,
+            pump: zonesRes.data.pump || prev.pump,
+            tank: tankRes.data?.tank || prev.tank,
+            lastSeen: zonesRes.data.lastSeen || Date.now()
+          }));
+        }
 
-        setEmergencyStopped(emergRes.data.emergencyStopped);
+        if (emergRes.data) {
+          setEmergencyStopped(emergRes.data.emergencyStopped);
+        }
         if (analyticsRes && analyticsRes.data) {
           setConsumption(analyticsRes.data);
+        }
+        if (alertsRes.data && alertsRes.data.alerts) {
+          setAlerts(alertsRes.data.alerts);
+          const activeHigh = alertsRes.data.alerts.find(a => a.status === 'active' && (a.severity === 'critical' || a.severity === 'high'));
+          if (activeHigh) setRecentAlert(activeHigh);
+        }
+        if (aiRes.data && aiRes.data.analysis) {
+          setLatestAiAnalysis(aiRes.data.analysis);
         }
       } catch (err) {
         console.warn('Initial fetch warning:', err.message);
@@ -109,7 +166,6 @@ export function SocketProvider({ children }) {
     });
 
     newSocket.on('consumption:update', (analyticsData) => {
-      console.log('[WS] Mise à jour temps réel de la consommation:', analyticsData);
       setConsumption(analyticsData);
     });
 
@@ -134,11 +190,26 @@ export function SocketProvider({ children }) {
       setTelemetry(prev => ({ ...prev, environment: envData, lastSeen: Date.now() }));
     });
 
+    // Real-time Centralized Alerts Event Handlers
     newSocket.on('alert:new', (alertData) => {
       setRecentAlert(alertData);
+      setAlerts(prev => {
+        const exists = prev.some(a => a.id === alertData.id);
+        if (exists) return prev.map(a => a.id === alertData.id ? alertData : a);
+        return [alertData, ...prev];
+      });
       if (alertData.type === 'watering_complete' || alertData.type === 'all_zones_complete') {
         fetchConsumption();
       }
+    });
+
+    newSocket.on('alert:update', (alertData) => {
+      setAlerts(prev => prev.map(a => a.id === alertData.id ? { ...a, ...alertData } : a));
+    });
+
+    newSocket.on('alert:resolved', (resolvedData) => {
+      setAlerts(prev => prev.map(a => a.id === resolvedData.id ? { ...a, status: 'resolved', resolved_at: resolvedData.resolvedAt } : a));
+      setRecentAlert(prev => prev && prev.id === resolvedData.id ? null : prev);
     });
 
     newSocket.on('emergency:triggered', () => {
@@ -209,10 +280,16 @@ export function SocketProvider({ children }) {
       mqttConnected,
       telemetry,
       recentAlert,
+      alerts,
+      alertsLoading,
+      latestAiAnalysis,
       staleData,
       emergencyStopped,
       consumption,
       refreshConsumption: fetchConsumption,
+      refreshAlerts: fetchAlerts,
+      refreshLatestAi: fetchLatestAi,
+      resolveAlert,
       triggerEmergency,
       resumeSystem,
       sendCommand,

@@ -10,23 +10,30 @@ const router = express.Router();
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanPassword = String(password || '');
 
-    if (!email || !password) {
+    if (!cleanEmail || !cleanPassword) {
       return res.status(400).json({ error: 'Email et mot de passe requis.' });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email }
+    const user = await prisma.user.findFirst({
+      where: {
+        email: {
+          equals: cleanEmail,
+          mode: 'insensitive'
+        }
+      }
     });
 
     if (!user) {
-      return res.status(401).json({ error: 'Identifiants incorrects.' });
+      return res.status(401).json({ error: 'Identifiants incorrects. Utilisateur non trouvé.' });
     }
 
-    const validPassword = await bcrypt.compare(password, user.passwordHash);
+    const validPassword = await bcrypt.compare(cleanPassword, user.passwordHash);
     if (!validPassword) {
-      return res.status(401).json({ error: 'Identifiants incorrects.' });
+      return res.status(401).json({ error: 'Mot de passe incorrect.' });
     }
 
     const token = jwt.sign(
@@ -35,13 +42,15 @@ router.post('/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    // Log login event
+    // Log login event with userId FK
     try {
+      const roleLabel = user.role === 'ADMIN' ? 'Administrateur' : 'Opérateur';
       await prisma.systemLog.create({
         data: {
           eventType: 'AUTH_LOGIN',
-          description: `Connexion réussie de l'administrateur (${email})`,
-          userEmail: email
+          description: `Connexion réussie (${roleLabel} : ${user.email})`,
+          userEmail: user.email,
+          userId: user.id
         }
       });
     } catch (e) {}
@@ -56,7 +65,8 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ error: 'Erreur serveur lors de la connexion.' });
+    console.error('[AUTH LOGIN ERROR]', error);
+    res.status(500).json({ error: error.message || 'Erreur serveur lors de la connexion.' });
   }
 });
 
@@ -111,12 +121,14 @@ router.post('/change-password', authenticateToken, async (req, res) => {
       data: { passwordHash: newHash }
     });
 
+    // Log with FK userId
     try {
       await prisma.systemLog.create({
         data: {
           eventType: 'AUTH_PASSWORD_CHANGE',
           description: 'Changement du mot de passe administrateur',
-          userEmail: user.email
+          userEmail: user.email,
+          userId: user.id
         }
       });
     } catch (e) {}

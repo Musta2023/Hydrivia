@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import { broadcast, registerMqttStatusProvider } from './socketService.js';
 import prisma from '../database/index.js';
 import { getConsumptionAnalytics } from './analyticsService.js';
+import { createAlert, resolveAlerts } from './alertService.js';
 
 let mqttClient = null;
 
@@ -47,6 +48,17 @@ export const liveState = {
   activeAlert: null
 };
 
+// Helper to resolve admin userId
+async function getUserIdByEmail(email) {
+  try {
+    if (!email) return null;
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    return user ? user.id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 export function initMQTT() {
   const brokerUrl = `${config.mqtt.protocol}://${config.mqtt.server}:${config.mqtt.port}`;
   console.log(`[MQTT] Tentative de connexion au broker: ${brokerUrl}`);
@@ -74,6 +86,9 @@ export function initMQTT() {
       console.log('[MQTT] Connecté avec succès à HiveMQ Cloud TLS.');
       liveState.connected = true;
       broadcast('mqtt:status', { connected: true, broker: config.mqtt.server });
+
+      // Resolve any previous disconnection alerts
+      resolveAlerts({ source: 'MQTT', type: 'DISCONNECTED' });
 
       // S'abonner aux topics HYDRIVIA
       const topics = [
@@ -106,16 +121,32 @@ export function initMQTT() {
       }
     });
 
-    mqttClient.on('error', (err) => {
+    mqttClient.on('error', async (err) => {
       console.warn('[MQTT] Avertissement/Erreur de connexion:', err.message);
       liveState.connected = false;
       broadcast('mqtt:status', { connected: false, error: err.message });
+
+      await createAlert({
+        source: 'MQTT',
+        category: 'CONNECTION',
+        type: 'CONNECTION_ERROR',
+        severity: 'warning',
+        message: `Erreur de connexion MQTT: ${err.message}`
+      });
     });
 
-    mqttClient.on('offline', () => {
+    mqttClient.on('offline', async () => {
       console.log('[MQTT] Client déconnecté (offline).');
       liveState.connected = false;
       broadcast('mqtt:status', { connected: false });
+
+      await createAlert({
+        source: 'MQTT',
+        category: 'CONNECTION',
+        type: 'DISCONNECTED',
+        severity: 'critical',
+        message: 'Broker MQTT déconnecté. Passage en mode sécurité local.'
+      });
     });
 
   } catch (error) {
@@ -218,6 +249,43 @@ async function handleIncomingMessage(topic, payload) {
   if (topic === 'hydrivia/tank/state') {
     liveState.tank = { ...liveState.tank, ...payload };
     broadcast('telemetry:tank', liveState.tank);
+
+    // Tank safety check & alert management
+    const level = liveState.tank.water_level;
+    if (level <= 20) {
+      liveState.tank.critical = true;
+      liveState.tank.low = true;
+      await createAlert({
+        source: 'HYDRIVIA',
+        category: 'WATER',
+        type: 'TANK_CRITICAL',
+        severity: 'critical',
+        value: level,
+        threshold: 20,
+        message: `Niveau réservoir CRITIQUE : ${level}% (${liveState.tank.volume_liters} L). Irrigation bloquée.`
+      });
+    } else if (level <= 30) {
+      liveState.tank.critical = false;
+      liveState.tank.low = true;
+      await createAlert({
+        source: 'HYDRIVIA',
+        category: 'WATER',
+        type: 'TANK_LOW',
+        severity: 'warning',
+        value: level,
+        threshold: 30,
+        message: `Niveau réservoir FAIBLE : ${level}% (${liveState.tank.volume_liters} L).`
+      });
+    } else {
+      // Water level restored > 30% -> Auto-resolve tank alerts
+      if (liveState.tank.critical || liveState.tank.low) {
+        liveState.tank.critical = false;
+        liveState.tank.low = false;
+        await resolveAlerts({ source: 'HYDRIVIA', category: 'WATER', type: 'TANK_LOW' });
+        await resolveAlerts({ source: 'HYDRIVIA', category: 'WATER', type: 'TANK_CRITICAL' });
+      }
+    }
+
     return;
   }
 
@@ -310,21 +378,16 @@ async function handleIncomingMessage(topic, payload) {
       } catch (e) {}
     }
 
-    try {
-      await prisma.alert.create({
-        data: {
-          type: payload.type || 'alert',
-          severity: payload.severity || 'info',
-          message: payload.message || 'Alerte reçue',
-          timestampMs: BigInt(payload.timestamp_ms || Date.now()),
-          createdAt: new Date()
-        }
-      });
-    } catch (err) {
-      console.error('[DB] Erreur insertion alerte:', err.message);
-    }
-
-    broadcast('alert:new', payload);
+    await createAlert({
+      source: payload.source || 'HYDRIVIA',
+      category: payload.category || 'SYSTEM',
+      type: (payload.type || 'alert').toUpperCase(),
+      severity: payload.severity || 'info',
+      message: payload.message || 'Alerte reçue',
+      zoneId: payload.zone_id || payload.zoneId || null,
+      value: payload.value !== undefined ? payload.value : null,
+      threshold: payload.threshold !== undefined ? payload.threshold : null
+    });
   }
 }
 
@@ -345,7 +408,7 @@ function checkSystemStatus() {
 }
 
 // Publish Zone Command
-export async function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct }) {
+export async function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct }, userEmail = 'admin@gmail.com') {
   const topic = `hydrivia/zones/${zoneId}/command`;
   const payload = {
     wateringL: parseFloat(wateringL) || 0,
@@ -370,11 +433,13 @@ export async function sendZoneCommand(zoneId, { wateringL, targetSoilMoisturePct
 
     // Log irrigation start
     try {
+      const userId = await getUserIdByEmail(userEmail);
       await prisma.systemLog.create({
         data: {
           eventType: 'IRRIGATION_START',
           description: `Commande envoyée Zone ${zoneId} (${liveState.zones[zoneId].plant}): ${payload.wateringL} L, humidité cible: ${payload.targetSoilMoisturePct}%`,
-          userEmail: 'admin@gmail.com'
+          userEmail,
+          userId
         }
       });
     } catch (e) {}
@@ -407,24 +472,24 @@ export async function triggerEmergencyStop(userEmail = 'admin@gmail.com') {
 
   liveState.pump.pump = 'OFF';
 
-  // Log emergency stop
+  // Log emergency stop & create alert
   try {
+    const userId = await getUserIdByEmail(userEmail);
     await prisma.systemLog.create({
       data: {
         eventType: 'ARRET_URGENCE',
         description: "Déclenchement immédiat de l'arrêt d'urgence : Pompe et toutes les vannes fermées.",
-        userEmail
+        userEmail,
+        userId
       }
     });
 
-    await prisma.alert.create({
-      data: {
-        type: 'emergency_stop',
-        severity: 'critical',
-        message: "Arrêt d'urgence déclenché par l'administrateur. Toutes les vannes et la pompe sont coupées.",
-        timestampMs: BigInt(Date.now()),
-        createdAt: new Date()
-      }
+    await createAlert({
+      source: 'HYDRIVIA',
+      category: 'SYSTEM',
+      type: 'EMERGENCY_STOP',
+      severity: 'critical',
+      message: `Arrêt d'urgence déclenché par ${userEmail}. Toutes les vannes et la pompe sont coupées.`
     });
   } catch (err) {
     console.error('[DB] Erreur log arret d\'urgence:', err);
@@ -442,13 +507,17 @@ export async function resumeOperation(userEmail = 'admin@gmail.com') {
   checkSystemStatus();
 
   try {
+    const userId = await getUserIdByEmail(userEmail);
     await prisma.systemLog.create({
       data: {
         eventType: 'SYSTEM_RESUME',
         description: 'Reprise normale du système après arrêt.',
-        userEmail
+        userEmail,
+        userId
       }
     });
+
+    await resolveAlerts({ source: 'HYDRIVIA', type: 'EMERGENCY_STOP' });
   } catch (err) {}
 
   broadcast('emergency:resumed', { timestamp: Date.now() });
@@ -482,8 +551,11 @@ function startSimulator() {
           
           const alertMsg = `Objectif d'humidité atteint (${zone.soil_humidity}%) pour Zone ${z} (${zone.plant}).`;
           await handleIncomingMessage('hydrivia/alerts', {
+            source: 'HYDRIVIA',
+            category: 'WATER',
             type: 'watering_complete',
             severity: 'info',
+            zone_id: z,
             message: alertMsg,
             timestamp_ms: Date.now()
           });

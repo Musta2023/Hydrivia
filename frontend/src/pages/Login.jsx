@@ -15,7 +15,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await login(email, password);
+      await login(email.trim(), password.trim());
     } catch (err) {
       setError(err.response?.data?.error || 'Identifiants invalides. Vérifiez votre email et mot de passe.');
     } finally {

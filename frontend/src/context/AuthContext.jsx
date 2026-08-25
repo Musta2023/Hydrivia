@@ -45,10 +45,17 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('hydrivia_user');
   };
 
+  const userRole = (user?.role || '').toUpperCase();
+  const isAdmin = userRole === 'ADMIN';
+  const isOperator = userRole === 'OPERATOR';
+
   return (
     <AuthContext.Provider value={{
       user,
       token,
+      role: userRole,
+      isAdmin,
+      isOperator,
       isAuthenticated: !!token && !!user,
       loading,
       login,

@@ -39,7 +39,7 @@ function AuthenticatedApp() {
       case 'soil':
         return <SoilPage />;
       case 'alerts':
-        return <AlertsPage />;
+        return <AlertsPage onNavigate={setActiveTab} />;
       case 'logs':
         return <LogsPage />;
       case 'settings':

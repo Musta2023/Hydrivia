@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext';
 import FarmCanvas from '../components/3d/FarmCanvas';
 import Bottom3DKPIBar from '../components/3d/Bottom3DKPIBar';
 
@@ -9,12 +10,14 @@ export default function Visualisation3D() {
     mqttConnected,
     toggleZone,
   } = useSocket();
+  const { isAdmin } = useAuth();
 
   const [selectedZoneId, setSelectedZoneId] = useState(null);
   const [selectedElement, setSelectedElement] = useState(null);
   const [cameraPreset, setCameraPreset] = useState('free');
 
   const handleToggleValve = async (zoneId) => {
+    if (!isAdmin) return;
     try {
       const currentZone = telemetry.zones?.[zoneId];
       const isCurrentlyOn = currentZone?.valve === 'ON';
@@ -26,6 +29,7 @@ export default function Visualisation3D() {
   };
 
   const handleTogglePump = async () => {
+    if (!isAdmin) return;
     try {
       const isCurrentlyOn = telemetry.pump?.pump === 'ON';
       if (isCurrentlyOn) {

@@ -33,7 +33,7 @@ const NAV_ITEMS = [
 ];
 
 export default function Sidebar({ activeTab, onTabChange }) {
-  const { logout } = useAuth();
+  const { user, isAdmin, logout } = useAuth();
   const { telemetry, mqttConnected } = useSocket();
 
   // Count active valves
@@ -115,8 +115,28 @@ export default function Sidebar({ activeTab, onTabChange }) {
         </div>
       </div>
 
-      {/* Logout Button */}
-      <div className="p-3 border-t border-hydra-border/80">
+      {/* User Profile & Logout */}
+      <div className="p-3 border-t border-hydra-border/80 space-y-2">
+        <div className="px-2 py-1.5 rounded-xl bg-hydra-dark/60 border border-hydra-border/60 flex items-center justify-between">
+          <div className="truncate pr-2">
+            <p className="text-xs font-semibold text-hydra-textMain truncate" title={user?.email || ''}>
+              {user?.email ? (user.email.split('@')[0].charAt(0).toUpperCase() + user.email.split('@')[0].slice(1)) : 'Admin'}
+            </p>
+            <p className={cn(
+              'text-[10px] font-mono font-bold uppercase tracking-wider',
+              isAdmin ? 'text-hydra-neon' : 'text-amber-400'
+            )}>
+              {isAdmin ? 'ADMINISTRATEUR' : 'OPÉRATEUR'}
+            </p>
+          </div>
+          <span className={cn(
+            'px-1.5 py-0.5 rounded text-[9px] font-mono font-bold',
+            isAdmin ? 'bg-hydra-neon/20 text-hydra-neon' : 'bg-amber-500/20 text-amber-300'
+          )}>
+            {isAdmin ? 'ACTIF' : 'LECTURE'}
+          </span>
+        </div>
+
         <button
           onClick={logout}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-hydra-textMuted hover:text-hydra-alert hover:bg-hydra-alert/10 transition-colors"

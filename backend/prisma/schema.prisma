@@ -8,57 +8,117 @@ generator client {
   provider = "prisma-client-js"
 }
 
+enum Role {
+  ADMIN
+  OPERATOR
+}
+
 model User {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique
-  passwordHash String   @map("password_hash")
-  role         String   @default("admin")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id           Int         @id @default(autoincrement())
+  email        String      @unique
+  passwordHash String      @map("password_hash")
+  role         Role        @default(OPERATOR)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  systemLogs   SystemLog[]
 
   @@map("users")
 }
 
-model SensorReading {
-  id           BigInt   @id @default(autoincrement())
-  timestamp    DateTime @default(now())
-  zone1Soil    Float?   @map("zone1_soil")
-  zone2Soil    Float?   @map("zone2_soil")
-  zone3Soil    Float?   @map("zone3_soil")
-  waterLevel   Float?   @map("water_level")
-  volumeLiters Float?   @map("volume_liters")
-  temperature  Float?
-  airHumidity  Float?   @map("air_humidity")
-  pumpRunning  Boolean  @default(false) @map("pump_running")
-  valve1       Boolean  @default(false)
-  valve2       Boolean  @default(false)
-  valve3       Boolean  @default(false)
+model Zone {
+  id               Int               @id
+  name             String
+  plant            String
+  enabled          Boolean           @default(true)
+  irrigationCycles IrrigationCycle[]
 
+  @@map("zones")
+}
+
+model SensorReading {
+  id           BigInt       @id @default(autoincrement())
+  timestamp    DateTime     @default(now())
+  zone1Soil    Float?       @map("zone1_soil")
+  zone2Soil    Float?       @map("zone2_soil")
+  zone3Soil    Float?       @map("zone3_soil")
+  waterLevel   Float?       @map("water_level")
+  volumeLiters Float?       @map("volume_liters")
+  temperature  Float?
+  airHumidity  Float?       @map("air_humidity")
+  pumpRunning  Boolean      @default(false) @map("pump_running")
+  valve1       Boolean      @default(false)
+  valve2       Boolean      @default(false)
+  valve3       Boolean      @default(false)
+  aiAnalyses   AIAnalysis[]
+
+  @@index([timestamp])
   @@map("sensor_readings")
 }
 
-model IrrigationCycle {
-  id                 Int       @id @default(autoincrement())
-  zoneId             Int       @map("zone_id")
-  plant              String
-  requestedLiters    Float?    @map("requested_liters")
-  targetSoilMoisture Float?    @map("target_soil_moisture")
-  deliveredLiters    Float?    @map("delivered_liters")
-  startTime          DateTime  @default(now()) @map("start_time")
-  endTime            DateTime? @map("end_time")
-  status             String    @default("running")
-  reason             String?
+model AIAnalysis {
+  id                    String            @id
+  timestamp             DateTime
+  decisionStatus        String            @map("decision_status")
+  validForMinutes       Int               @default(60) @map("valid_for_minutes")
+  confidencePct         Float             @default(85) @map("confidence_pct")
+  nextEvaluationMinutes Int               @default(120) @map("next_evaluation_minutes")
+  waterBudget           Json?             @map("water_budget")
+  weatherAssessment     Json?             @map("weather_assessment")
+  zoneDecisions         Json?             @map("zone_decisions")
+  decisionSummary       String            @map("decision_summary")
+  warnings              Json?
+  sensorReadingId       BigInt?           @map("sensor_reading_id")
+  sensorReading         SensorReading?    @relation(fields: [sensorReadingId], references: [id], onDelete: SetNull)
+  irrigationCycles      IrrigationCycle[]
+  createdAt             DateTime          @default(now()) @map("created_at")
 
+  @@index([sensorReadingId])
+  @@index([timestamp])
+  @@map("ai_analyses")
+}
+
+model IrrigationCycle {
+  id                 Int         @id @default(autoincrement())
+  zoneId             Int         @map("zone_id")
+  zone               Zone        @relation(fields: [zoneId], references: [id])
+  plant              String
+  requestedLiters    Float?      @map("requested_liters")
+  targetSoilMoisture Float?      @map("target_soil_moisture")
+  deliveredLiters    Float?      @map("delivered_liters")
+  startTime          DateTime    @default(now()) @map("start_time")
+  endTime            DateTime?   @map("end_time")
+  status             String      @default("running")
+  reason             String?
+  aiAnalysisId       String?     @map("ai_analysis_id")
+  aiAnalysis         AIAnalysis? @relation(fields: [aiAnalysisId], references: [id], onDelete: SetNull)
+
+  @@index([zoneId])
+  @@index([aiAnalysisId])
+  @@index([startTime])
   @@map("irrigation_cycles")
 }
 
 model Alert {
-  id          Int      @id @default(autoincrement())
-  type        String
-  severity    String
+  id          Int       @id @default(autoincrement())
+  source      String    @default("HYDRIVIA") // 'HYDRIVIA', 'AI', 'MQTT', 'SYSTEM'
+  category    String    @default("SYSTEM") // 'WATER', 'PUMP', 'VALVE', 'SENSOR', 'API', 'CONNECTION', 'DATABASE'
+  type        String // 'TANK_LOW', 'TANK_CRITICAL', 'PUMP_TIMEOUT', 'RATE_LIMIT', etc.
+  severity    String // 'info', 'warning', 'error', 'critical'
   message     String
-  timestampMs BigInt?  @map("timestamp_ms")
-  createdAt   DateTime @default(now()) @map("created_at")
+  deviceId    String?   @map("device_id")
+  zoneId      Int?      @map("zone_id")
+  value       Float?
+  threshold   Float?
+  status      String    @default("active") // 'active', 'resolved', 'acknowledged'
+  metadata    Json?
+  timestampMs BigInt?   @map("timestamp_ms")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  resolvedAt  DateTime? @map("resolved_at")
 
+  @@index([source])
+  @@index([category])
+  @@index([severity])
+  @@index([status])
+  @@index([createdAt])
   @@map("alerts")
 }
 
@@ -67,8 +127,11 @@ model SystemLog {
   eventType   String   @map("event_type")
   description String
   userEmail   String?  @map("user_email")
+  userId      Int?     @map("user_id")
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now()) @map("created_at")
 
+  @@index([userId])
   @@map("system_logs")
 }
 
@@ -77,21 +140,4 @@ model Setting {
   value String?
 
   @@map("settings")
-}
-
-model AIAnalysis {
-  id                    String   @id
-  timestamp             DateTime
-  decisionStatus        String   @map("decision_status")
-  validForMinutes       Int      @default(60) @map("valid_for_minutes")
-  confidencePct         Float    @default(85) @map("confidence_pct")
-  nextEvaluationMinutes Int      @default(120) @map("next_evaluation_minutes")
-  waterBudget           Json?    @map("water_budget")
-  weatherAssessment     Json?    @map("weather_assessment")
-  zoneDecisions         Json?    @map("zone_decisions")
-  decisionSummary       String   @map("decision_summary")
-  warnings              Json?
-  createdAt             DateTime @default(now()) @map("created_at")
-
-  @@map("ai_analyses")
 }

@@ -1,15 +1,21 @@
 import React, { useState } from 'react';
-import { AlertOctagon, ShieldAlert, X, Power, CheckCircle } from 'lucide-react';
+import { AlertOctagon, ShieldAlert, X, Power, CheckCircle, Lock } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
+import { useAuth } from '../../context/AuthContext';
 
 export default function EmergencyModal({ isOpen, onClose }) {
   const { triggerEmergency, resumeSystem, emergencyStopped } = useSocket();
+  const { isAdmin } = useAuth();
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
   if (!isOpen) return null;
 
   const handleConfirmStop = async () => {
+    if (!isAdmin) {
+      alert('Action réservée aux administrateurs.');
+      return;
+    }
     setLoading(true);
     try {
       await triggerEmergency();

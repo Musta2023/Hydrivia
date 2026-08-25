@@ -6,7 +6,7 @@ import EmergencyModal from './EmergencyModal';
 import { cn } from '../../utils/cn';
 
 export default function Header({ activeTab, onNavigate }) {
-  const { user, logout } = useAuth();
+  const { user, role, isAdmin, isOperator, logout } = useAuth();
   const { mqttConnected, wsConnected, emergencyStopped, staleData } = useSocket();
   const [time, setTime] = useState(new Date());
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
@@ -28,6 +28,8 @@ export default function Header({ activeTab, onNavigate }) {
     month: 'short'
   });
 
+  const userInitials = (user?.email || 'AD').slice(0, 2).toUpperCase();
+
   return (
     <>
       <header className="sticky top-0 z-30 h-16 glass-panel border-b border-hydra-border/80 px-4 lg:px-8 flex items-center justify-between gap-4">
@@ -37,6 +39,13 @@ export default function Header({ activeTab, onNavigate }) {
             <Cpu className="w-3.5 h-3.5" />
             <span>ESP32-01</span>
           </div>
+
+          {isOperator && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-mono font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span>MODE OPÉRATEUR (LECTURE SEULE)</span>
+            </div>
+          )}
 
           {staleData && (
             <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-hydra-warning/20 border border-hydra-warning/40 text-hydra-warning text-xs font-medium animate-pulse">
@@ -88,24 +97,47 @@ export default function Header({ activeTab, onNavigate }) {
             </span>
           </div>
 
-          {/* Emergency Stop Button */}
-          <button
-            onClick={() => setShowEmergencyModal(true)}
-            className={cn(
-              'emergency-button px-3.5 py-1.5 lg:px-4 lg:py-2 rounded-xl text-xs lg:text-sm flex items-center gap-2 transition-transform',
-              emergencyStopped && 'ring-2 ring-hydra-alert animate-pulse'
-            )}
-          >
-            <AlertOctagon className="w-4 h-4 flex-shrink-0" />
-            <span className="tracking-wide uppercase">
-              {emergencyStopped ? 'STATUT ARRÊT' : 'ARRÊT D\'URGENCE'}
-            </span>
-          </button>
+          {/* Emergency Stop Button (Admin only) */}
+          {isAdmin ? (
+            <button
+              onClick={() => setShowEmergencyModal(true)}
+              className={cn(
+                'emergency-button px-3.5 py-1.5 lg:px-4 lg:py-2 rounded-xl text-xs lg:text-sm flex items-center gap-2 transition-transform',
+                emergencyStopped && 'ring-2 ring-hydra-alert animate-pulse'
+              )}
+            >
+              <AlertOctagon className="w-4 h-4 flex-shrink-0" />
+              <span className="tracking-wide uppercase">
+                {emergencyStopped ? 'STATUT ARRÊT' : 'ARRÊT D\'URGENCE'}
+              </span>
+            </button>
+          ) : (
+            <div
+              className={cn(
+                'px-3 py-1.5 rounded-xl text-xs font-mono border flex items-center gap-1.5',
+                emergencyStopped
+                  ? 'bg-hydra-alert/20 border-hydra-alert/40 text-hydra-alert font-bold animate-pulse'
+                  : 'bg-hydra-dark/60 border-hydra-border text-hydra-textMuted opacity-75'
+              )}
+              title="Action réservée aux administrateurs"
+            >
+              <AlertOctagon className="w-3.5 h-3.5 text-hydra-alert" />
+              <span>{emergencyStopped ? 'ARRÊT D\'URGENCE ACTIF' : 'ARRÊT : ADMIN REQUIS'}</span>
+            </div>
+          )}
 
           {/* User & Logout */}
           <div className="flex items-center gap-2 pl-2 border-l border-hydra-border">
-            <div className="w-8 h-8 rounded-full bg-hydra-neon/20 border border-hydra-neon/40 flex items-center justify-center text-hydra-neon font-bold text-xs">
-              AD
+            <div
+              title={`${user?.email || 'Utilisateur'} (${role || 'USER'})`}
+              className={cn(
+                'w-8 h-8 rounded-full border flex items-center justify-center font-bold text-xs font-mono cursor-default',
+                isAdmin
+                  ? 'bg-hydra-neon/20 border-hydra-neon/40 text-hydra-neon shadow-[0_0_10px_rgba(0,255,136,0.2)]'
+                  : 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+              )}
+            >
+              {userInitials}
             </div>
             <button
               onClick={logout}

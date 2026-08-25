@@ -18,6 +18,7 @@ import alertsRoutes from './routes/alerts.js';
 import logsRoutes from './routes/logs.js';
 import emergencyRoutes from './routes/emergency.js';
 import aiAnalysisRoutes from './routes/aiAnalysis.js';
+import usersRoutes from './routes/users.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -28,6 +29,7 @@ app.use(express.json());
 
 // API Routes Mounting
 app.use('/api/auth', authRoutes);
+app.use('/api/users', usersRoutes);
 app.use('/api/zones', zonesRoutes);
 app.use('/api/tank', tankRoutes);
 app.use('/api/pump', pumpRoutes);

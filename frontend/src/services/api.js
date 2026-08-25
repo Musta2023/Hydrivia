@@ -20,12 +20,11 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401) {
+    // Only clear token if the request was an authenticated API call, not the login endpoint itself
+    const isLoginEndpoint = error.config && error.config.url && error.config.url.includes('/auth/login');
+    if (error.response && error.response.status === 401 && !isLoginEndpoint) {
       localStorage.removeItem('hydrivia_token');
       localStorage.removeItem('hydrivia_user');
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
-      }
     }
     return Promise.reject(error);
   }

@@ -1,11 +1,12 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
+import { requireRole } from '../middleware/requireRole.js';
 import { triggerEmergencyStop, resumeOperation, liveState } from '../services/mqttService.js';
 
 const router = express.Router();
 
-// POST /api/emergency/stop - Trigger immediate Emergency Shutdown
-router.post('/stop', authenticateToken, (req, res) => {
+// POST /api/emergency/stop - Trigger immediate Emergency Shutdown (ADMIN only)
+router.post('/stop', authenticateToken, requireRole('ADMIN'), (req, res) => {
   const userEmail = req.user?.email || 'admin@gmail.com';
   triggerEmergencyStop(userEmail);
   res.json({
@@ -15,8 +16,8 @@ router.post('/stop', authenticateToken, (req, res) => {
   });
 });
 
-// POST /api/emergency/resume - Resume normal operation
-router.post('/resume', authenticateToken, (req, res) => {
+// POST /api/emergency/resume - Resume normal operation (ADMIN only)
+router.post('/resume', authenticateToken, requireRole('ADMIN'), (req, res) => {
   const userEmail = req.user?.email || 'admin@gmail.com';
   resumeOperation(userEmail);
   res.json({

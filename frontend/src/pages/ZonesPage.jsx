@@ -21,12 +21,14 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import CircularGauge from '../components/common/CircularGauge';
 import StatusBadge from '../components/common/StatusBadge';
 
 export default function ZonesPage() {
   const { telemetry, sendCommand, toggleZone, emergencyStopped } = useSocket();
+  const { isAdmin, isOperator } = useAuth();
   const [selectedZone, setSelectedZone] = useState(1);
   const [wateringL, setWateringL] = useState(50);
   const [targetMoisture, setTargetMoisture] = useState(55);
@@ -151,27 +153,33 @@ export default function ZonesPage() {
               </span>
             </div>
 
-            <button
-              onClick={() => toggleZone(selectedZone, isWatering ? 'OFF' : 'ON')}
-              disabled={emergencyStopped}
-              className={`w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition shadow-lg ${
-                isWatering
-                  ? 'bg-hydra-alert text-white hover:bg-hydra-alert/80 shadow-[0_0_20px_rgba(255,59,59,0.3)]'
-                  : 'neon-button'
-              }`}
-            >
-              {isWatering ? (
-                <>
-                  <Square className="w-4 h-4" />
-                  <span>ARRÊTER L'IRRIGATION (ZONE {selectedZone})</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4" />
-                  <span>DÉMARRER IRRIGATION MANUELLE</span>
-                </>
-              )}
-            </button>
+            {isAdmin ? (
+              <button
+                onClick={() => toggleZone(selectedZone, isWatering ? 'OFF' : 'ON')}
+                disabled={emergencyStopped}
+                className={`w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition shadow-lg ${
+                  isWatering
+                    ? 'bg-hydra-alert text-white hover:bg-hydra-alert/80 shadow-[0_0_20px_rgba(255,59,59,0.3)]'
+                    : 'neon-button'
+                }`}
+              >
+                {isWatering ? (
+                  <>
+                    <Square className="w-4 h-4" />
+                    <span>ARRÊTER L'IRRIGATION (ZONE {selectedZone})</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    <span>DÉMARRER IRRIGATION MANUELLE</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <div className="p-3 bg-hydra-dark/60 rounded-xl border border-hydra-border text-center text-xs font-mono text-hydra-textMuted">
+                <span>🔒 Bascule manuelle réservée à l'administrateur</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -179,12 +187,12 @@ export default function ZonesPage() {
         <div className="lg:col-span-7 glass-panel rounded-2xl p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-base font-bold text-hydra-textMain flex items-center gap-2">
-                <Send className="w-4 h-4 text-hydra-neon" />
-                Programmer une dose d'irrigation intelligente
+              <h3 className="text-sm font-bold text-hydra-textMain uppercase tracking-wider flex items-center gap-2">
+                <Droplets className="w-4 h-4 text-hydra-neon" />
+                Commande d'Arrosage MQTT Personnalisée
               </h3>
               <span className="text-xs font-mono text-hydra-neon bg-hydra-neon/10 px-2.5 py-1 rounded-lg border border-hydra-neon/30">
-                MQTT JSON
+                Zone {selectedZone} — {currentZone.plant}
               </span>
             </div>
             <p className="text-xs text-hydra-textMuted mb-6">
@@ -195,6 +203,13 @@ export default function ZonesPage() {
               <div className="mb-4 p-3 bg-hydra-neon/20 border border-hydra-neon/40 rounded-xl text-hydra-neon text-xs flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
                 <span>{actionSuccess}</span>
+              </div>
+            )}
+
+            {isOperator && (
+              <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-center gap-2 font-mono">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-400" />
+                <span>Mode Opérateur (Lecture Seule) : L'envoi de commandes MQTT vers les actionneurs est verrouillé.</span>
               </div>
             )}
 
@@ -215,9 +230,10 @@ export default function ZonesPage() {
                   min="5"
                   max="500"
                   step="5"
+                  disabled={!isAdmin}
                   value={wateringL}
                   onChange={(e) => setWateringL(Number(e.target.value))}
-                  className="w-full accent-hydra-neon bg-hydra-border rounded-lg h-2 cursor-pointer"
+                  className="w-full accent-hydra-neon bg-hydra-border rounded-lg h-2 cursor-pointer disabled:opacity-50"
                 />
                 <div className="flex justify-between text-[10px] text-hydra-textDim font-mono">
                   <span>Min: 5 L</span>
@@ -242,9 +258,10 @@ export default function ZonesPage() {
                   min="20"
                   max="90"
                   step="1"
+                  disabled={!isAdmin}
                   value={targetMoisture}
                   onChange={(e) => setTargetMoisture(Number(e.target.value))}
-                  className="w-full accent-hydra-neon bg-hydra-border rounded-lg h-2 cursor-pointer"
+                  className="w-full accent-hydra-neon bg-hydra-border rounded-lg h-2 cursor-pointer disabled:opacity-50"
                 />
                 <div className="flex justify-between text-[10px] text-hydra-textDim font-mono">
                   <span>20% (Sec)</span>
@@ -254,14 +271,20 @@ export default function ZonesPage() {
               </div>
 
               {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={loading || emergencyStopped}
-                className="w-full neon-button py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-lg"
-              >
-                <Send className="w-4 h-4" />
-                <span>{loading ? 'Transmission en cours...' : `ENVOYER COMMANDE MQTT — ZONE ${selectedZone}`}</span>
-              </button>
+              {isAdmin ? (
+                <button
+                  type="submit"
+                  disabled={loading || emergencyStopped}
+                  className="w-full neon-button py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>{loading ? 'Transmission en cours...' : `ENVOYER COMMANDE MQTT — ZONE ${selectedZone}`}</span>
+                </button>
+              ) : (
+                <div className="w-full py-3.5 rounded-xl text-xs font-mono font-bold flex items-center justify-center gap-2 bg-hydra-dark/60 border border-hydra-border text-hydra-textMuted cursor-not-allowed">
+                  <span>🔒 Commande MQTT désactivée en mode Opérateur</span>
+                </div>
+              )}
             </form>
           </div>
 
