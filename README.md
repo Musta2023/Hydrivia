@@ -36,7 +36,7 @@ Smart IoT precision irrigation and digital twin platform combining ESP32 edge te
 
 ## Overview
 
-Hydrivia is an autonomous precision irrigation platform designed to prevent crop water stress and optimize water usage across agricultural parcels. An ESP32 microcontroller collects real-time capacitive soil moisture, ultrasonic tank volume, and atmospheric data, streaming telemetry over TLS-encrypted MQTT (QoS 1). External AI workflows (n8n / FusionAI) evaluate soil and weather conditions to generate targeted irrigation recommendations, while a Node.js/Express gateway synchronizes state with a PostgreSQL database and exposes real-time dashboards via WebSockets and React.
+Hydrivia is an autonomous precision irrigation platform designed to prevent crop water stress and optimize water usage across agricultural parcels. An ESP32 microcontroller collects real-time capacitive soil moisture, ultrasonic tank volume, and atmospheric data, streaming telemetry over TLS-encrypted MQTT (QoS 1). External AI workflows ( FusionAI) evaluate soil and weather conditions to generate targeted irrigation recommendations, while a Node.js/Express gateway synchronizes state with a PostgreSQL database and exposes real-time dashboards via WebSockets and React.
 
 ---
 
@@ -57,7 +57,7 @@ flowchart TB
     end
 
     subgraph AIWorkflow ["🧠 AI Decision Engine"]
-        N8N["n8n Workflow / FusionAI<br/>- Agro-climatic analysis<br/>- Target water budget calculation"]
+        FusionAI["FusionAI<br/>- Agro-climatic analysis<br/>- Target water budget calculation"]
     end
 
     subgraph Backend ["⚙️ Backend Gateway (Node.js / Express)"]
@@ -72,7 +72,7 @@ flowchart TB
 
     Firmware <==>|"MQTT QoS 1 (TLS)"| MQTTBroker
     MQTTBroker <==>|"MQTT Subscriber / Publisher"| ExpressApp
-    N8N -->|"POST /api/ai-analysis (M2M Secret)"| ExpressApp
+    FusionAI -->|"POST /api/ai-analysis (M2M Secret)"| ExpressApp
     ExpressApp <==>|"REST API / WebSockets (Socket.IO)"| ReactApp
 ```
 
@@ -498,7 +498,7 @@ npm run prisma:generate
 ## Security Notes
 
 1. **Credentials Isolation**: Never commit `secrets.h`, `.env`, or production database connection strings to source control.
-2. **M2M AI Webhook Isolation**: The `POST /api/ai-analysis` endpoint is authenticated exclusively via the shared secret header (`x-fusionai-secret` or bearer token). It is intentionally decoupled from user JWT authentication so automated external worker pipelines (n8n) function independently of user sessions.
+2. **M2M AI Webhook Isolation**: The `POST /api/ai-analysis` endpoint is authenticated exclusively via the shared secret header (`x-fusionai-secret` or bearer token). It is intentionally decoupled from user JWT authentication so automated external worker pipelines (FusionAI) function independently of user sessions.
 3. **Server-Side RBAC Enforcement**: Role permissions are checked server-side via [requireRole.js](file:///c:/Users/DELL/Desktop/IoTGen/hydrivia/backend/src/middleware/requireRole.js). Disabling or bypassing UI buttons in browser devtools will result in an immediate `HTTP 403 Forbidden` response.
 4. **At-Least-Once MQTT Delivery**: MQTT publishing is configured for QoS 1. Backend and AI consumers should ensure idempotent handling of duplicate message packets by referencing the ISO timestamp.
 
