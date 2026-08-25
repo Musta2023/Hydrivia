@@ -2,7 +2,7 @@
 #include <Adafruit_BME280.h>
 #include <Adafruit_Sensor.h>
 #include <ArduinoJson.h>
-#include <PubSubClient.h>
+#include <MQTT.h>
 #include <RTClib.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -197,7 +197,7 @@ const char *TOPIC_SENSOR_RESPONSE = "hydrivia/sensors/realtime";
 const char *MQTT_CLIENT_ID = "hydrivia-irrigation";
 
 WiFiClientSecure espClient;
-PubSubClient mqttClient(espClient);
+MQTTClient mqttClient(2304);
 
 // ============================================================================
 // TIMERS
@@ -260,7 +260,7 @@ bool isTransitioningZone = false;
 // Wi-Fi / MQTT
 void connectWiFi();
 void connectMQTT();
-void mqttCallback(char *topic, byte *payload, unsigned int length);
+void mqttCallback(String &topic, String &payload);
 void handleZoneCommand(uint8_t zone, String command);
 void handleSensorRequest(const String &message);
 String getIsoTimestamp();
@@ -806,11 +806,10 @@ void setup() {
       "-----END CERTIFICATE-----\n";
 
   espClient.setCACert(HIVEMQ_CA_CERT);
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
-  mqttClient.setBufferSize(2304);
+  mqttClient.begin(MQTT_SERVER, MQTT_PORT, espClient);
+  mqttClient.onMessage(mqttCallback);
   mqttClient.setKeepAlive(30);
-  mqttClient.setSocketTimeout(15);
+  mqttClient.setTimeout(15000);
 
   connectMQTT();
 
@@ -906,17 +905,14 @@ void loop() {
 // MQTT CALLBACK (Non-blocking command ingestion)
 // ============================================================================
 
-void mqttCallback(char *topic, byte *payload, unsigned int length) {
-  String receivedTopic = String(topic);
+void mqttCallback(String &topic, String &payload) {
+  String receivedTopic = topic;
   receivedTopic.replace("\"", "");
   receivedTopic.replace("'", "");
   receivedTopic.replace(" ", "");
   receivedTopic.trim();
 
-  String message = "";
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
+  String message = payload;
   message.trim();
 
   // 1. On-Demand Real-time Sensor Request
@@ -1276,8 +1272,8 @@ void connectMQTT() {
     publishTankState();
     publishEnvironmentState();
   } else {
-    Serial.print("[ERROR] MQTT failed. State = ");
-    Serial.println(mqttClient.state());
+    Serial.print("[ERROR] MQTT failed. Last Error = ");
+    Serial.println((int)mqttClient.lastError());
 
     char sslErr[128];
     int errCode = espClient.lastError(sslErr, sizeof(sslErr));
@@ -1385,7 +1381,7 @@ void publishZoneState(uint8_t zone) {
   char buffer[384];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
-    mqttClient.publish(topic, buffer, true);
+    mqttClient.publish(topic, buffer, true, 1);
   }
 }
 
@@ -1408,7 +1404,7 @@ void publishPumpState() {
   char buffer[256];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
-    mqttClient.publish(TOPIC_PUMP_STATE, buffer, true);
+    mqttClient.publish(TOPIC_PUMP_STATE, buffer, true, 1);
   }
 }
 
@@ -1427,7 +1423,7 @@ void publishTankState() {
   char buffer[320];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
-    mqttClient.publish(TOPIC_TANK_STATE, buffer, true);
+    mqttClient.publish(TOPIC_TANK_STATE, buffer, true, 1);
   }
 }
 
@@ -1443,7 +1439,7 @@ void publishEnvironmentState() {
   char buffer[256];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
-    mqttClient.publish(TOPIC_ENVIRONMENT_STATE, buffer, true);
+    mqttClient.publish(TOPIC_ENVIRONMENT_STATE, buffer, true, 1);
   }
 }
 
@@ -1498,10 +1494,10 @@ void publishSnapshot() {
   char buffer[2048];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
-    bool success = mqttClient.publish(TOPIC_SNAPSHOT, buffer);
+    bool success = mqttClient.publish(TOPIC_SNAPSHOT, buffer, false, 1);
     if (success) {
       Serial.println();
-      Serial.println("[MQTT] 60-SECOND SNAPSHOT PUBLISHED");
+      Serial.println("[MQTT] 60-SECOND SNAPSHOT PUBLISHED (QoS 1)");
     } else {
       Serial.println("[ERROR] Snapshot publish failed.");
     }
@@ -1521,7 +1517,7 @@ void publishAlert(const char *type, const char *severity, const char *message) {
   char buffer[384];
   size_t length = serializeJson(doc, buffer, sizeof(buffer));
   if (length > 0 && length < sizeof(buffer)) {
-    mqttClient.publish(TOPIC_ALERTS, buffer);
+    mqttClient.publish(TOPIC_ALERTS, buffer, false, 1);
   }
 }
 
@@ -1680,9 +1676,9 @@ void handleSensorRequest(const String &message) {
   size_t len = serializeJson(doc, buffer, sizeof(buffer));
 
   if (len > 0 && len < sizeof(buffer) && mqttClient.connected()) {
-    bool published = mqttClient.publish(TOPIC_SENSOR_RESPONSE, buffer, false);
+    bool published = mqttClient.publish(TOPIC_SENSOR_RESPONSE, buffer, false, 1);
     if (published) {
-      Serial.println("[SENSOR RESPONSE] Published realtime sensor data");
+      Serial.println("[SENSOR RESPONSE] Published realtime sensor data (QoS 1)");
     } else {
       Serial.println("[SENSOR RESPONSE] MQTT publish failed");
     }
