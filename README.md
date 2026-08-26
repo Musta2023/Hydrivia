@@ -1,5 +1,7 @@
 # Hydrivia
 
+[![CI](https://github.com/Musta2023/Hydrivia/actions/workflows/ci.yml/badge.svg)](https://github.com/Musta2023/Hydrivia/actions/workflows/ci.yml)
+
 Smart IoT precision irrigation and digital twin platform combining ESP32 edge telemetry, MQTT transport, AI-driven agro-climatic analysis, and real-time web monitoring.
 
 ---
@@ -27,6 +29,7 @@ Smart IoT precision irrigation and digital twin platform combining ESP32 edge te
 - [Development](#development)
   - [Running Tests](#running-tests)
   - [Database Migrations](#database-migrations)
+  - [CI/CD Pipeline & GitHub Secrets](#cicd-pipeline--github-secrets)
 - [Deployment](#deployment)
 - [Security Notes](#security-notes)
 - [Contributing](#contributing)
@@ -486,6 +489,24 @@ npm run prisma:push
 # Generate an updated Prisma client
 npm run prisma:generate
 ```
+
+### CI/CD Pipeline & GitHub Secrets
+
+Automated continuous integration is handled via GitHub Actions in [.github/workflows/ci.yml](file:///.github/workflows/ci.yml) and runs on every push and pull request targeting the `main` branch.
+
+The pipeline executes three parallel jobs:
+1. **`install-and-lint`**: Verifies workspace dependencies install cleanly via `npm run install:all`.
+2. **`backend-tests`**: Spins up an ephemeral `postgres:15` container, applies the Prisma schema, seeds canonical tables, and executes the 42-assertion RBAC & security test suite.
+3. **`frontend-build`**: Builds the React 18 / Vite frontend and archives the production `dist/` bundle as a workflow artifact.
+
+#### Repository Secrets Configuration
+Configure the following secrets in **GitHub > Repository Settings > Secrets and variables > Actions**:
+
+| Secret Name | Description | CI Behavior / Fallback |
+| :--- | :--- | :--- |
+| `JWT_SECRET` | Secret key for signing and verifying authentication JWTs. | Defaults to an ephemeral CI test key when omitted. |
+| `FUSIONAI_WEBHOOK_SECRET` | Pre-shared token for authenticating external M2M AI webhook requests (`x-fusionai-secret` header). | Defaults to an ephemeral CI test secret when omitted. |
+| `DATABASE_URL` | PostgreSQL connection string. | Defaults to the ephemeral CI `postgres:15` service container (`postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable`). |
 
 ---
 

@@ -1,0 +1,174 @@
+# ==============================================================================
+# HYDRIVIA — Continuous Integration (CI) Workflow
+# ==============================================================================
+# This workflow runs automated testing and build validation for the Hydrivia
+# smart irrigation platform across both backend and frontend components.
+#
+# Triggers:
+#   - Every push to the `main` branch
+#   - Every pull request targeting the `main` branch
+#
+# Jobs overview:
+#   1. install-and-lint : Verifies clean dependency installation across monorepo.
+#   2. backend-tests    : Boots ephemeral PostgreSQL 15, applies Prisma schema,
+#                         and runs the 42-assertion RBAC & security test suite.
+#   3. frontend-build   : Compiles Vite/React 18 frontend and packages build artifacts.
+# ==============================================================================
+
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# Cancel redundant in-progress workflow runs for the same branch/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Job 1: Dependency Installation & Lint Check
+  # ----------------------------------------------------------------------------
+  install-and-lint:
+    name: Monorepo Install & Lint Check
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the repository source code
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js runtime with npm dependency caching
+      - name: Set up Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      # Step 3: Install all root, backend, and frontend dependencies
+      - name: Install dependencies (root, backend, frontend)
+        run: npm run install:all
+
+      # Step 4: Linting Step
+      # NOTE: Neither root, backend, nor frontend package.json defines a "lint" script.
+      # Per repository guidelines, we avoid modifying package manifests and report status.
+      - name: Verify code style / Linting
+        run: |
+          echo "No 'lint' script defined in workspace package.json files. Skipping lint step."
+
+  # ----------------------------------------------------------------------------
+  # Job 2: Backend Tests & Database Schema Verification
+  # ----------------------------------------------------------------------------
+  backend-tests:
+    name: Backend RBAC & API Tests
+    runs-on: ubuntu-latest
+
+    # Ephemeral PostgreSQL 15 service container for running tests in isolation
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: hydrivia_test
+        ports:
+          - 5432:5432
+        # Health check to ensure PostgreSQL is ready before starting steps
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      # Step 1: Check out the repository source code
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js runtime with npm dependency caching
+      - name: Set up Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      # Step 3: Install all monorepo dependencies
+      - name: Install dependencies (root, backend, frontend)
+        run: npm run install:all
+
+      # Step 4: Generate Prisma Client for PostgreSQL models
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=backend/prisma/schema.prisma
+
+      # Step 5: Push Prisma database schema to the throwaway service PostgreSQL
+      - name: Push Prisma schema to test PostgreSQL container
+        run: npx prisma db push --schema=backend/prisma/schema.prisma
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable' }}
+          DIRECT_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable' }}
+
+      # Step 6: Initialize test database with canonical zones and default admin user
+      - name: Seed test database records
+        run: node -e "import('./backend/src/database/index.js').then(m => m.initDatabase()).then(() => process.exit(0))"
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable' }}
+          DIRECT_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable' }}
+          ADMIN_EMAIL: 'admin@gmail.com'
+          ADMIN_PASSWORD: 'AZERTY12345'
+          MQTT_SIMULATE: 'true'
+
+      # Step 7: Execute automated RBAC and security test suite (42 assertions)
+      - name: Run backend RBAC automated test suite
+        run: node backend/verify_rbac_tests.js
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable' }}
+          DIRECT_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgrespassword@localhost:5432/hydrivia_test?sslmode=disable' }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET || 'hydrivia_ci_placeholder_jwt_secret_key_2026_test' }}
+          FUSIONAI_WEBHOOK_SECRET: ${{ secrets.FUSIONAI_WEBHOOK_SECRET || 'hydrivia_fusionai_ci_placeholder_secret_2026' }}
+          ADMIN_EMAIL: 'admin@gmail.com'
+          ADMIN_PASSWORD: 'AZERTY12345'
+          MQTT_SIMULATE: 'true'
+
+  # ----------------------------------------------------------------------------
+  # Job 3: Frontend Production Build & Artifact Upload
+  # ----------------------------------------------------------------------------
+  frontend-build:
+    name: Frontend Build & Packaging
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the repository source code
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js runtime with npm dependency caching
+      - name: Set up Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      # Step 3: Install monorepo dependencies
+      - name: Install dependencies (root, backend, frontend)
+        run: npm run install:all
+
+      # Step 4: Build React / Vite frontend for production
+      - name: Build frontend application
+        run: npm run build
+        working-directory: frontend
+
+      # Step 5: Upload production dist/ directory as a workflow artifact
+      - name: Upload frontend build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
